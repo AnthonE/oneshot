@@ -22,9 +22,16 @@ ONESHOT_BIN=crates/client/target/release/oneshot tools/hd.sh   # the release cli
 ELO_REF_DIR=moodboard node tools/board.mjs look --views hd-beach,hd-cliff,hd-meadow,hd-vista,hd-inland,hd-base
                                     # shoot, then the sheet: reference | now | last pass, with the marks
 node ci/look.mjs 'map=3&eye=127,-0.2,4&look=150,-5,-6'         # the same eye in the WebGL2 page (SwiftShader, minutes)
+HD_MAP=9 ELO_REF_DIR=moodboard node tools/board.mjs look --views hd-ice_base,hd-ice_lake,…
+                                    # one map's loop: only its views are shot (HD_JOBS=2: two at once, on a GPU)
+tools/hd.sh refs                    # the references the board gives a source (public photographs) → moodboard/
 ```
 
+On a box with no display or GPU (a cloud session) `tools/hd.sh` starts Xvfb and draws on lavapipe: the same frame, about a minute and a half a view (most of it the level's load), so shoot one map (`HD_MAP`), one at a time (a debug client on lavapipe holds 6 to 8 GB, and a second on a 16 GB box is killed; nothing else heavy beside it).
+
 Build first: `cd crates/client && cargo build` (a minute or two after a change; a shader in `assets/shaders` or a file in `assets` needs none). The references are other games' screenshots in `moodboard/` (the hdlook pictures for nature up close, the Blood Gulch ones for a canyon's walls, trails and bases; git-ignored, the board's private refs): a target for the look, never an asset. Nothing is traced, copied or published from them, and no prompt names them.
+
+Icefall's and Pithead's references are real photographs (for light, colour, texture and weather, never a plan). Icefall's are from Wikimedia Commons, each on the board with its source and licence, so `tools/hd.sh refs` fetches them on any box.
 
 The views are `tools/hd.sh`'s `VIEWS` and the board's `hd-*` (`board/board.json`: each with what to take from its reference and what to ignore). A new one goes in both. `hd-judge` (`.claude/agents/hd-judge.md`) reads a view against its reference without your hopes for it.
 
@@ -44,6 +51,18 @@ Read a view against this list, top down; the first line that fails over a large 
 | **water** | a hard horizon, the sky in it, rock standing in it | `water.rs`, `water.wgsl` |
 | **life** | something moving: spray, dust, motes, grass in wind | `look/fx/` (the pools), `foliage.rs` |
 | **light** | sun and shade far apart, shade with colour in it | `mood.rs`, `rig.rs`, `fill.rs`, `quality.rs` (shadows, AO) |
+
+## A valley under snow
+
+Icefall is the third land (`level::Land::Alpine`: a terrain with no void whose mood snows). The same list, where its own numbers are:
+
+| layer | where ours is |
+|---|---|
+| **ground** | snow is the sand's lane reading the drift set (`ground::ICE_TINT`, `textures::DRIFT_TILE_M`, `tools/snow.py`); the lake is the terrain's own flat (`alpine.lake` in `maps/icefall/map.json`) |
+| **rock** | where snow gives way to rock: `level::SNOW_ROCK_SLOPE` a vertex, `ground::SNOW_CLIFF_TAN` a pixel; the wall's shape is the `alpine` block (`cliff`, `crags`, `peaks`, a massif's `flank`), at 2 m a cell |
+| **things standing** | the bases, the col's station and the snow shed are boxes in `map.json` (`blast`, `blast_dark`, `steel`, `tread`); boulders in `boulders::COLD_TINT`; snags (`dead_tree`, never in leaf) |
+| **distance** | `far.rs` (`SNOW`, `SNOW_ROCK`), `mood::FROST`'s mist |
+| **light** | `mood::FROST`: the sun in the south, the south wall's shade over the moraine |
 
 ## Changing one thing
 

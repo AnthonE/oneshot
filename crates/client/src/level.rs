@@ -519,11 +519,21 @@ pub fn dress_level(
             .remove::<MeshMaterial3d<StandardMaterial>>()
             .insert((MeshMaterial3d(m), Dressed));
     }
+    // A snowed valley's concrete is cold (`ALPINE_CONCRETE`).
+    let alpine = sim::maps::ALL
+        .iter()
+        .find(|d| d.id == mood.map)
+        .is_some_and(|d| Land::of(d) == Land::Alpine);
     for (e, look, block) in boxes.iter() {
-        let (Some(base), Some((set, _, _))) = (box_material(look.0), dress(look.0)) else {
+        let (Some(mut base), Some((set, _, _))) = (box_material(look.0), dress(look.0)) else {
             commands.entity(e).insert(Dressed);
             continue;
         };
+        if alpine && matches!(look.0, BLAST | BLAST_DARK) {
+            let c = base.base_color.to_linear();
+            let k = ALPINE_CONCRETE;
+            base.base_color = Color::linear_rgb(c.red * k[0], c.green * k[1], c.blue * k[2]);
+        }
         let Some((albedo, normal)) = tex.set(set) else {
             continue;
         };
@@ -726,6 +736,11 @@ fn look(i: u8) -> (Color, f32, f32) {
 /// edge, so it wanders with its noise instead of stepping per vertex. The
 /// rock skin grows on the same weight (`look/cliffs.rs`).
 const ROCK_SLOPE: (f32, f32) = (0.45, 0.9);
+/// A snowed valley's cast concrete (`blast`, `blast_dark`), over the look's
+/// own tint: the set is a brown photograph, which in the sun on snow read
+/// as board. Its brown taken out to a cool mid grey, darker than the snow
+/// and paler than the rock.
+const ALPINE_CONCRETE: [f32; 3] = [0.8, 0.93, 1.12];
 /// The same under a valley's snow (`Land::Alpine`): snow lies on steeper
 /// ground than sand does, to about 39°, and the per-pixel veto takes over
 /// from 46° (`look::ground::SNOW_CLIFF_TAN`). At the canyon's band every
@@ -1595,7 +1610,17 @@ pub fn build(
             // The sea's height: a canyon's shore is wet up from it, an
             // island's keel and stacks are lapped by the cloud at it
             // (`look/ground.rs`, the lap).
-            let wet_from = map.light.sea;
+            // A valley under snow has no sea: its lowest ground, the lake's
+            // flat, is its ice, and the ground is told its level instead.
+            let wet_from = if land == Land::Alpine {
+                t.heights
+                    .iter()
+                    .copied()
+                    .min()
+                    .map_or(f32::NEG_INFINITY, |q| q as f32 / HEIGHT_Q)
+            } else {
+                map.light.sea
+            };
             let soil = mats.add(StandardMaterial {
                 base_color: Color::srgb(0.75, 0.62, 0.48),
                 perceptual_roughness: 0.95,

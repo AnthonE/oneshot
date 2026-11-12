@@ -10,12 +10,23 @@
 #   tools/hd.sh list               the views and their poses
 #   HD_QUALITY=medium tools/hd.sh  another rung (potato low medium high ultra)
 #   HD_TAG=before tools/hd.sh      → traces/hd/before/<view>.png, to keep a round
+#   HD_MAP=9 tools/hd.sh           only that map's views (with no view named): a
+#                                  map's own loop, and what the board shoots for it
+#   HD_JOBS=2 tools/hd.sh          that many at once, where there is the memory (a
+#                                  debug client on lavapipe holds 6 to 8 GB: one
+#                                  at a time on a 16 GB box, or the second is killed)
+#   tools/hd.sh refs               fetch the board's references that name a source
+#                                  (public photographs) into $ELO_REF_DIR (moodboard)
 #
 # The board lays them beside the references and the last pass
 # (`ELO_REF_DIR=moodboard node tools/board.mjs look --views hd-beach,…`,
 # board/board.json's hd-* views; the hd skill is the loop). Build first:
 # cd crates/client && cargo build. The settings are a fresh file, so a
-# player's own rows never move a shot. Needs a display (DISPLAY, default :0).
+# player's own rows never move a shot. It draws on the display there is
+# (DISPLAY, default :0); on a box with none (a cloud box) it starts Xvfb and
+# draws on lavapipe, as ci/desktop_shot.sh does: the same picture a rung
+# down in speed, a minute and a half a view where a GPU takes ten seconds
+# (most of it the level's load), so shoot a map's views, several at once.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 root=$(pwd)
@@ -83,13 +94,13 @@ VIEWS=(
   "pit_collar|map=8&eye=-6.5,0.7,2.5&look=4,5,-2|2"
   "pit_sheave|map=8&eye=-1,12.1,-2.4&look=-17,5,8|2"
   "pit_shaft|map=8&eye=-9,0.7,2.5&look=4,-14,-12|2"
-  "ice_base|map=9&eye=-168,4.5,22&look=-206,9,0|2"
+  "ice_base|map=9&eye=-186,5.9,14&look=-206,8.5,-4|2"
   "ice_hangar|map=9&eye=-211,6.7,5&look=-238,6.5,-2|2"
-  "ice_terrace|map=9&eye=-236,14.2,-22&look=-150,4,30|2"
+  "ice_terrace|map=9&eye=-208.5,14.2,3&look=-90,-2,80|2"
   "ice_lake|map=9&eye=-158,2.4,56&look=0,6,96|2"
-  "ice_col|map=9&eye=-10,11.3,-6&look=-84,22,0|2"
-  "ice_perch|map=9&eye=-76,27.6,0&look=-210,6,0|2"
-  "ice_moraine|map=9&eye=-150,2.6,-58&look=-20,6,-112|2"
+  "ice_col|map=9&eye=-4,4,-34&look=-80,16,-6|2"
+  "ice_perch|map=9&eye=-88,26.3,0&look=-206,20,0|2"
+  "ice_moraine|map=9&eye=-134,7.3,-80&look=0,4,-116|2"
   "ice_over|map=9&eye=0,70,-120&look=0,0,40|2"
 )
 
@@ -98,26 +109,80 @@ if [ "${1:-}" = list ]; then
   exit 0
 fi
 
+# The references a view is read against: those the board gives a source are
+# public photographs, fetched once into the board's private folder (never
+# the repo). Other games' screenshots have no source and are the operator's.
+if [ "${1:-}" = refs ]; then
+  dir=${ELO_REF_DIR:-moodboard}
+  node -e 'for (const v of require("./board/board.json").views) for (const r of v.refs || []) if (r.source) console.log(r.file + "\t" + r.source)' | sort -u |
+    while IFS=$'\t' read -r f url; do
+      [ -s "$dir/$f" ] && continue
+      mkdir -p "$(dirname "$dir/$f")"
+      if curl -fsSL -m 60 -A 'oneshot-hd-refs/1.0' -o "$dir/$f" "$url"; then echo "$dir/$f"; else echo "hd: $f was not fetched ($url)" >&2; rm -f "$dir/$f"; fi
+    done
+  exit 0
+fi
+
 bin=${ONESHOT_BIN:-$root/crates/client/target/debug/oneshot}
 [ -x "$bin" ] || { echo "hd: no $bin (cd crates/client && cargo build)" >&2; exit 1; }
 out=$root/traces/hd${HD_TAG:+/$HD_TAG}
 mkdir -p "$out"
 conf=$(mktemp -d)
-trap 'rm -rf "$conf"' EXIT
+xvfb=
+trap '[ -z "$xvfb" ] || kill "$xvfb" 2>/dev/null; rm -rf "$conf"' EXIT
 export DISPLAY=${DISPLAY:-:0} BEVY_ASSET_ROOT="$root/crates/client" XDG_CONFIG_HOME="$conf"
+# No display: one of our own, and lavapipe unless the caller named a driver.
+limit=${HD_TIMEOUT:-120}
+d=${DISPLAY#*:}
+if [ ! -e "/tmp/.X11-unix/X${d%%.*}" ]; then
+  command -v Xvfb >/dev/null || { echo "hd: no display at $DISPLAY and no Xvfb (apt-get install xvfb mesa-vulkan-drivers)" >&2; exit 1; }
+  n=90
+  while [ -e "/tmp/.X11-unix/X$n" ] || [ -e "/tmp/.X$n-lock" ]; do n=$((n + 1)); done
+  Xvfb ":$n" -screen 0 1280x720x24 -nolisten tcp >/dev/null 2>&1 &
+  xvfb=$!
+  for _ in $(seq 50); do [ -e "/tmp/.X11-unix/X$n" ] && break; sleep 0.1; done
+  export DISPLAY=":$n"
+  lvp=
+  for f in /usr/share/vulkan/icd.d/lvp_icd.json /usr/share/vulkan/icd.d/lvp_icd.*.json; do
+    [ -e "$f" ] && { lvp=$f; break; }
+  done
+  if [ -z "${VK_ICD_FILENAMES:-}${VK_DRIVER_FILES:-}" ] && [ -n "$lvp" ]; then
+    export VK_ICD_FILENAMES=$lvp VK_DRIVER_FILES=$lvp
+  fi
+  limit=${HD_TIMEOUT:-600}
+fi
 
-want=("$@")
-fail=0
-for v in "${VIEWS[@]}"; do
-  IFS='|' read -r id q secs <<<"$v"
-  if [ ${#want[@]} -gt 0 ] && [[ ! " ${want[*]} " =~ " $id " ]] && [[ ! " ${want[*]} " =~ " hd-$id " ]]; then continue; fi
-  png=$out/$id.png
+shoot() {
+  local id=$1 q=$2 secs=$3 png=$out/$1.png
   rm -f "$png"
-  if timeout "${HD_TIMEOUT:-120}" "$bin" --pose "$q" --quality "${HD_QUALITY:-high}" --shot "$png" --shot-at "$secs" >"$out/$id.log" 2>&1 && [ -s "$png" ]; then
+  if timeout "$limit" "$bin" --pose "$q" --quality "${HD_QUALITY:-high}" --shot "$png" --shot-at "$secs" >"$out/$id.log" 2>&1 && [ -s "$png" ]; then
     echo "$png  $q"
   else
     echo "hd: $id was not shot (see $out/$id.log)" >&2
-    fail=1
+    return 1
   fi
+}
+
+want=("$@")
+jobs=${HD_JOBS:-1}
+fail=0
+running=0
+for v in "${VIEWS[@]}"; do
+  IFS='|' read -r id q secs <<<"$v"
+  if [ ${#want[@]} -gt 0 ]; then
+    if [[ ! " ${want[*]} " =~ " $id " ]] && [[ ! " ${want[*]} " =~ " hd-$id " ]]; then continue; fi
+  elif [ -n "${HD_MAP:-}" ] && [[ "$q" != "map=$HD_MAP&"* ]]; then
+    continue
+  fi
+  shoot "$id" "$q" "$secs" &
+  running=$((running + 1))
+  if [ "$running" -ge "$jobs" ]; then
+    wait -n || fail=1
+    running=$((running - 1))
+  fi
+done
+while [ "$running" -gt 0 ]; do
+  wait -n || fail=1
+  running=$((running - 1))
 done
 exit $fail

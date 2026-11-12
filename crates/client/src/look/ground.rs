@@ -66,7 +66,8 @@ pub struct GroundParams {
     pub wall: Vec4,
     /// x the array layer the rock reads: 3, an island's 4, a snowy
     /// island's 6; y the layer the first lane (sand) reads: 0, a snowy
-    /// island's drifts 5; zw unused.
+    /// island's drifts 5; z 1 on a valley under snow (its rock's snow lies
+    /// on its ledges); w unused.
     pub layers: Vec4,
     /// x = the share of each 45° step between two wall planes over which
     /// both are read, y/z = the cosine between the triangle's plane and the
@@ -136,6 +137,12 @@ pub const ICE_TINT: [Vec4; 4] = [
     Vec4::new(0.95, 0.92, 0.88, 1.0),
     Vec4::new(0.3, 0.34, 0.44, 1.0),
 ];
+
+/// A valley's rock under snow (`level::Land::Alpine`), in the rock's lane:
+/// a dark warm grey, a step paler than the island's blue-black, so its beds
+/// can be counted from across the valley and it is another hue than the
+/// snow on it, not only another value.
+pub const VALLEY_ROCK_TINT: Vec4 = Vec4::new(0.44, 0.41, 0.4, 1.0);
 
 pub const TINT: [Vec4; 4] = [
     Vec4::new(1.0, 1.1, 1.25, 1.0),
@@ -277,6 +284,12 @@ pub const NO_SEA: f32 = -1.0e5;
 /// whole again `LAP_FADE_M` higher (the `sea` lanes with `w` under zero),
 /// so a keel's point and a stack's foot are lost in it, not cut by it.
 pub const LAP_M: f32 = 9.0;
+/// A valley's ice (the `sea` lanes with `w` under −1.5; `sea.x` its level):
+/// ground within `ICE_OVER_M` of the level is the sheet, and the snow has
+/// taken over `ICE_FADE_M` higher, so the shore is where the floor leaves
+/// the lake's flat.
+pub const ICE_OVER_M: f32 = 0.05;
+pub const ICE_FADE_M: f32 = 0.12;
 pub const LAP_FADE_M: f32 = 12.0;
 /// The swash: ground is wet from the water to this far above it, and dry
 /// again `WET_FADE_M` higher; wet ground is darker by `WET_DARK`.
@@ -339,6 +352,13 @@ pub fn material(
         if !isle {
             params.cliff.x = SNOW_CLIFF_TAN.0;
             params.cliff.y = SNOW_CLIFF_TAN.1;
+            // A valley's rock holds its snow on its ledges, and its lowest
+            // ground is ice (`sea_y` its level, `level::build`).
+            params.layers.z = 1.0;
+            params.tint[3] = VALLEY_ROCK_TINT;
+            if sea_y.is_finite() {
+                params.sea = Vec4::new(sea_y, ICE_OVER_M, ICE_FADE_M, -2.0);
+            }
         }
     } else if isle {
         params.tint = ISLE_TINT;
@@ -348,7 +368,9 @@ pub fn material(
         params.rock_b = ISLE_ROCK_B;
         params.rock_c = ISLE_ROCK_C;
     }
-    params.sea.x = if sea_y.is_finite() { sea_y } else { NO_SEA };
+    if !(snow && !isle) {
+        params.sea.x = if sea_y.is_finite() { sea_y } else { NO_SEA };
+    }
     if isle && sea_y.is_finite() {
         params.sea = Vec4::new(sea_y, LAP_M, LAP_FADE_M, -1.0);
     }

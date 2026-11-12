@@ -121,7 +121,7 @@ pub const ISLE_TINT: [f32; 3] = [0.8, 0.8, 0.84];
 /// A snowed valley's paint over the island's blocks (`level::Land::Alpine`):
 /// their orange taken out to a dark neutral grey, granite out of the snow,
 /// so a boulder reads as cover against white from across a lane.
-pub const COLD_TINT: [f32; 3] = [0.36, 0.45, 0.68];
+pub const COLD_TINT: [f32; 3] = [0.3, 0.39, 0.62];
 /// Stone the sea washes: darker and glossier.
 pub const WET_TINT: [f32; 3] = [0.4, 0.35, 0.31];
 pub const WET_ROUGH: f32 = 0.45;
