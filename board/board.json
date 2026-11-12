@@ -1276,7 +1276,7 @@
     {
       "id": "hd-ice_base",
       "name": "Icefall: red's base from its forecourt",
-      "what": "the facade in the mountain's foot from the top of its apron, twenty metres off: the hangar's door and the north door, their sills, the cliff over them",
+      "what": "the facade in the mountain's foot from the top of its apron, twenty-three metres off: the hangar's door and the south door, the drifts against the wall between them, the cliff over them",
       "take": "a base built into a mountain: a concrete front with three doors under a wall of rock and snow, the side's colour round its hangar door, snow drifted against it",
       "shoot": [
         "tools/hd.sh"

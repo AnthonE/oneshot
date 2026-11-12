@@ -572,7 +572,7 @@ pub fn dress_level(
         // Snow takes no grime or seams, nor a soaked road dust.
         match block.filter(|_| look.0 != SNOW && !(look.0 == ROAD && wet > 0.0)) {
             Some(b) => {
-                let w = weathering::material(m, surface(look.0), b, dusty, mood.roofed);
+                let w = weathering::material(m, surface(look.0), b, dusty, mood.roofed, alpine);
                 ec.remove::<MeshMaterial3d<StandardMaterial>>()
                     .insert(MeshMaterial3d(level_mats.add(w)));
             }
@@ -738,14 +738,16 @@ fn look(i: u8) -> (Color, f32, f32) {
 const ROCK_SLOPE: (f32, f32) = (0.45, 0.9);
 /// A snowed valley's cast concrete (`blast`, `blast_dark`), over the look's
 /// own tint: the set is a brown photograph, which in the sun on snow read
-/// as board. Its brown taken out to a cool mid grey, darker than the snow
-/// and paler than the rock.
-const ALPINE_CONCRETE: [f32; 3] = [0.8, 0.93, 1.12];
-/// The same under a valley's snow (`Land::Alpine`): snow lies on steeper
-/// ground than sand does, to about 39°, and the per-pixel veto takes over
-/// from 46° (`look::ground::SNOW_CLIFF_TAN`). At the canyon's band every
-/// mountainside between was a mottle of both.
-const SNOW_ROCK_SLOPE: (f32, f32) = (0.8, 1.05);
+/// as board. Its brown taken out and the whole lifted to a pale cool grey:
+/// darker than the snow, a clear step paler than the rock it stands in,
+/// so a base is found without its door's colour.
+const ALPINE_CONCRETE: [f32; 3] = [1.0, 1.2, 1.5];
+/// The same under a valley's snow (`Land::Alpine`): the vertices say rock
+/// only where the per-pixel veto (`look::ground::SNOW_CLIFF_TAN`, from 45°)
+/// already has, so the snow's edge is the pixel's, wandering with its
+/// noise. At the canyon's band every mountainside was a mottle of both,
+/// and with the two bands end to end the edge was the 2 m cells' teeth.
+const SNOW_ROCK_SLOPE: (f32, f32) = (1.2, 1.6);
 /// A creek bed is gravel: ground under the floor (below `CREEK_Y`, fully
 /// half a metre lower) that also lies in a trough, under both of its
 /// neighbours `CREEK_STENCIL_M` off along an axis by `CREEK_BASIN`'s first
@@ -935,6 +937,12 @@ fn terrain_mesh(t: &TerrainDef, land: Land) -> Mesh {
         .with_inserted_indices(Indices::U32(idx))
 }
 
+/// Whether a block's top (at `top`, over `mid`) is open to the sky: nothing
+/// built stands over its middle. Where snow settles (`weathering::Block::open`).
+fn open_top(map: &sim::map::Map, mid: Vec3, top: f32) -> bool {
+    !map.occupied(mid.x, mid.z, 0.3, top + 0.2, top + 200.0)
+}
+
 /// Spawns map `id`'s level; `old` is the last one's, taken down first.
 #[allow(clippy::too_many_arguments)]
 pub fn build(
@@ -1037,6 +1045,7 @@ pub fn build(
             run: None,
             hidden: rock::hidden_edges(min, max, i, &all),
             own_value: true,
+            open: open_top(&map, mid, max.y),
         };
         // A long box on uneven ground: its grime follows the ground along
         // it, not the height under its middle (an end wall across a
@@ -1243,6 +1252,7 @@ pub fn build(
             run: None,
             hidden: rock::hidden_edges(min, max, usize::MAX, &all),
             own_value: true,
+            open: open_top(&map, mid, max.y),
         };
         commands.spawn((
             LevelPart,
@@ -1361,6 +1371,7 @@ pub fn build(
                 run: None,
                 hidden: 0,
                 own_value: false,
+                open: open_top(&map, Vec3::new(x, 0.0, z), sol.y1),
             },
             // No wear: an arc is turned segments overlapping at their
             // ends, and each one's end edges are inside the next.
@@ -1373,6 +1384,7 @@ pub fn build(
                 run: None,
                 hidden: 0,
                 own_value: false,
+                open: open_top(&map, Vec3::new(x, 0.0, z), sol.y1),
             },
             // No wear either: the edges a box's wear is laid along aren't
             // there on a curve.
@@ -1388,6 +1400,7 @@ pub fn build(
                     run: None,
                     hidden: 0,
                     own_value: false,
+                    open: open_top(&map, mid, b.y),
                 }
             }
         };
@@ -1560,13 +1573,27 @@ pub fn build(
             // vehicles' bays and the walls (`look/grass.rs`,
             // `look/clutter.rs`). Neither casts a shadow (a rung without
             // them would light a fighter's feet they shade). An island's
-            // bare sandstone grows dry tufts and sheds its own chips; land
-            // under snow, an island's or a valley's, neither.
+            // bare sandstone grows dry tufts and sheds its own chips; an
+            // island under snow, neither; a valley under snow, dry tufts
+            // and dark stones through it.
             let seed = id as u32 * 7919 + 1;
             let clear = crate::look::grass::Clear::pads(&map);
             let isle = land == Land::Isle;
             let snowed = crate::look::mood::of(id).snow;
-            let cover = if snowed {
+            // A valley under snow: dry tufts through it in drifts (as an
+            // island's sand grows them), none on its ice or by its shore.
+            let cover = if land == Land::Alpine {
+                let ice = t
+                    .heights
+                    .iter()
+                    .copied()
+                    .min()
+                    .map_or(f32::NEG_INFINITY, |q| q as f32 / HEIGHT_Q);
+                // Off what is built, too (the clutter's own places): its
+                // ground runs on under a hangar's floor.
+                let clear = crate::look::clutter::clear(&map, t);
+                crate::look::grass::blocks(t, lo, hi, seed, &clear, ice, true)
+            } else if snowed {
                 Vec::new()
             } else {
                 crate::look::grass::blocks(t, lo, hi, seed, &clear, def.light.sea, isle)
@@ -1587,10 +1614,16 @@ pub fn build(
                 ));
             }
             let clear = crate::look::clutter::clear(&map, t);
-            let litter = if snowed {
+            let soil = match land {
+                Land::Canyon => crate::look::clutter::Soil::Canyon,
+                Land::Isle => crate::look::clutter::Soil::Isle,
+                Land::Alpine => crate::look::clutter::Soil::Snow,
+            };
+            // An island under snow sheds nothing; a valley's stones show through.
+            let litter = if snowed && land != Land::Alpine {
                 Vec::new()
             } else {
-                crate::look::clutter::blocks(t, lo, hi, seed ^ 0xc1a7_7e75, &clear, isle)
+                crate::look::clutter::blocks(t, lo, hi, seed ^ 0xc1a7_7e75, &clear, soil)
             };
             for (mesh, centre, layer) in litter {
                 commands.spawn((
@@ -1711,6 +1744,7 @@ pub fn build(
                         run: None,
                         hidden: 0,
                         own_value: false,
+                        open: false,
                     },
                     Mesh3d(meshes.add({
                         // Cut where the boxes stand on it.

@@ -35,6 +35,16 @@ Icefall's and Pithead's references are real photographs (for light, colour, text
 
 The views are `tools/hd.sh`'s `VIEWS` and the board's `hd-*` (`board/board.json`: each with what to take from its reference and what to ignore). A new one goes in both. `hd-judge` (`.claude/agents/hd-judge.md`) reads a view against its reference without your hopes for it.
 
+## A round with judges
+
+One `hd-judge` a view, all at once, each told three things: the pass it is reading (`traces/hd/<view>.png`, the same frame as the newest folder under `board/passes/`), the pass before it by its folder's name (the judge's own rule would take the newest, which is this one), and what changed since, one line a change, so its "since the last pass" can say what each did. Then:
+
+- **Freeze the tree while they read.** A judge reads the code a gap points at; a file that changes under it is reported as a change it could not see in the frame.
+- **Read the sheet yourself first.** A defect you can see (something growing through a floor, a colour that is plainly a bug, a pattern that is worse than the last pass) is fixed and shot again before a judge is spent on it. Their read is for what you no longer see.
+- **Rank across the views, not within one.** The gap most of them put first is the round's; a view's own gap that no other shares waits, unless it is its whole frame.
+- **A view that cannot see its take is the first gap.** Half of Icefall's first eyes stood where a lip, a deck or the view's own subject hid what the view was named for; the judges said so before anything else, and a moved eye loosens one round's comparison and no more.
+- **Batch what does not overlap.** A pass is ten minutes on a box with no GPU: a round may change the rock, the snow and the concrete at once, each its own constant and its own line in what the judges are told.
+
 ## What the references have
 
 Read a view against this list, top down; the first line that fails over a large share of the frame is the gap.

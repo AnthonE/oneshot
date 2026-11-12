@@ -61,6 +61,18 @@ const AIR: [f32; 3] = [0.50, 0.62, 0.80];
 /// Under snow (a valley whose mood snows, `level::Land::Alpine`): the cold
 /// rock of its faces and a paler bed in it, snow on what lies flat, and a
 /// paler air to go into.
+/// And its shape: not mesas but a range, leaving the terrain's edge at the
+/// wall's own height (`SNOW_EDGE_Y`, under its crest) and climbing
+/// `SNOW_RISE_M` by `SNOW_RISE_OVER_M` out in masses `SNOW_RANGE_M` across,
+/// with summits `SNOW_PEAK_H` over that on ridges `SNOW_PEAK_M` apart: from
+/// the valley's floor the wall's crest stands 30° up, and what is behind
+/// it shows only what it has over that.
+const SNOW_EDGE_Y: f32 = 92.0;
+const SNOW_RISE_M: f32 = 300.0;
+const SNOW_RISE_OVER_M: (f32, f32) = (10.0, 480.0);
+const SNOW_RANGE_M: f32 = 420.0;
+const SNOW_PEAK_H: f32 = 190.0;
+const SNOW_PEAK_M: f32 = 230.0;
 const SNOW_ROCK: [f32; 3] = [0.10, 0.11, 0.14];
 const SNOW_ROCK_PALE: [f32; 3] = [0.20, 0.22, 0.27];
 const SNOW: [f32; 3] = [0.80, 0.85, 0.93];
@@ -87,7 +99,20 @@ fn smooth(a: f32, b: f32, x: f32) -> f32 {
 /// The far land's height at (x, z), `out` metres past the terrain's edge,
 /// on a map whose bound toward the sea is at x `sea_x` (the water at
 /// `sea`; not finite: no sea).
-pub fn height(x: f32, z: f32, out: f32, sea_x: f32, sea: f32, seed: u32) -> f32 {
+pub fn height(x: f32, z: f32, out: f32, sea_x: f32, sea: f32, seed: u32, snow: bool) -> f32 {
+    if snow {
+        // A range under snow: broad masses, sharp summits along their ridges.
+        let climb = smooth(SNOW_RISE_OVER_M.0, SNOW_RISE_OVER_M.1, out);
+        let n = 0.65 * noise(x / SNOW_RANGE_M, z / SNOW_RANGE_M, seed)
+            + 0.35
+                * noise(
+                    x / (SNOW_RANGE_M * 0.41) + 9.0,
+                    z / (SNOW_RANGE_M * 0.41) + 4.0,
+                    seed ^ 0x5bd1,
+                );
+        let r = 1.0 - (2.0 * noise(x / SNOW_PEAK_M + 3.0, z / SNOW_PEAK_M + 7.0, seed ^ 0x9e37) - 1.0).abs();
+        return SNOW_EDGE_Y + SNOW_RISE_M * climb * (0.25 + 0.75 * n) + SNOW_PEAK_H * r * r * climb;
+    }
     let climb = smooth(RISE_OVER_M.0, RISE_OVER_M.1, out);
     // Mesas: two octaves, cut into terraces with a short scarp between.
     let n = 0.65 * noise(x / MESA_M, z / MESA_M, seed)
@@ -125,7 +150,11 @@ pub fn mesh(lo: Vec2, hi: Vec2, sea_x: f32, sea: f32, seed: u32, snow: bool) -> 
         let edge = (half.x / dir.x.abs().max(1e-4)).min(half.y / dir.y.abs().max(1e-4));
         for &out in &RINGS_M {
             let p = mid + dir * (edge + out);
-            pos.push(Vec3::new(p.x, height(p.x, p.y, out.max(0.0), sea_x, sea, seed), p.y));
+            pos.push(Vec3::new(
+                p.x,
+                height(p.x, p.y, out.max(0.0), sea_x, sea, seed, snow),
+                p.y,
+            ));
             outs.push(out.max(0.0));
         }
     }
@@ -224,17 +253,27 @@ mod tests {
     fn it_climbs_away_from_the_rim_and_sinks_toward_the_sea() {
         let (sea_x, sea) = (150.0, -6.0);
         // At the edge, inland: the rim's level.
-        assert!((height(-300.0, 0.0, 0.0, sea_x, sea, 3) - EDGE_Y).abs() < 1.0);
+        assert!((height(-300.0, 0.0, 0.0, sea_x, sea, 3, false) - EDGE_Y).abs() < 1.0);
         // Far out, inland: high, somewhere.
         let far = (0..40)
-            .map(|i| height(-900.0 - 7.0 * i as f32, 120.0 * (i % 5) as f32, 800.0, sea_x, sea, 3))
+            .map(|i| {
+                height(
+                    -900.0 - 7.0 * i as f32,
+                    120.0 * (i % 5) as f32,
+                    800.0,
+                    sea_x,
+                    sea,
+                    3,
+                    false,
+                )
+            })
             .fold(f32::MIN, f32::max);
         assert!(far > 250.0, "the far land tops out at {far}");
         // Out to sea, and at the terrain's own edge off the beach: under it.
-        assert!(height(sea_x + 400.0, 0.0, 300.0, sea_x, sea, 3) < sea);
-        assert!(height(sea_x + 54.0, 20.0, 0.0, sea_x, sea, 3) < sea);
+        assert!(height(sea_x + 400.0, 0.0, 300.0, sea_x, sea, 3, false) < sea);
+        assert!(height(sea_x + 54.0, 20.0, 0.0, sea_x, sea, 3, false) < sea);
         // No sea, no sinking.
-        assert!(height(900.0, 0.0, 800.0, sea_x, f32::NEG_INFINITY, 3) > EDGE_Y);
+        assert!(height(900.0, 0.0, 800.0, sea_x, f32::NEG_INFINITY, 3, false) > EDGE_Y);
     }
 
     #[test]

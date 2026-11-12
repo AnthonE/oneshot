@@ -139,10 +139,17 @@ pub const ICE_TINT: [Vec4; 4] = [
 ];
 
 /// A valley's rock under snow (`level::Land::Alpine`), in the rock's lane:
-/// a dark warm grey, a step paler than the island's blue-black, so its beds
-/// can be counted from across the valley and it is another hue than the
-/// snow on it, not only another value.
-pub const VALLEY_ROCK_TINT: Vec4 = Vec4::new(0.44, 0.41, 0.4, 1.0);
+/// a dark neutral grey, another hue than the snow on it and not only
+/// another value (the island's is the snow's own blue), dark enough that
+/// through the valley's mist it still stands a third of the snow's value.
+pub const VALLEY_ROCK_TINT: Vec4 = Vec4::new(0.33, 0.315, 0.32, 1.0);
+/// And its snow, in the sand's lane: nearer neutral than the island's blue
+/// lift (which cancelled the sun's warmth on it), and a step brighter.
+pub const VALLEY_SNOW_TINT: Vec4 = Vec4::new(1.64, 1.67, 1.74, 1.0);
+/// Its faces' streaks: a wall a hundred metres high wants them broader,
+/// longer and deeper than a canyon's 45 m (`rock_d`'s width and height m,
+/// `rock_c`'s strength), or it has no verticals at all from across a lane.
+pub const VALLEY_STREAK: (f32, f32, f32) = (2.6, 34.0, 0.3);
 
 pub const TINT: [Vec4; 4] = [
     Vec4::new(1.0, 1.1, 1.25, 1.0),
@@ -355,7 +362,11 @@ pub fn material(
             // A valley's rock holds its snow on its ledges, and its lowest
             // ground is ice (`sea_y` its level, `level::build`).
             params.layers.z = 1.0;
+            params.tint[0] = VALLEY_SNOW_TINT;
             params.tint[3] = VALLEY_ROCK_TINT;
+            params.rock_d.x = VALLEY_STREAK.0;
+            params.rock_d.y = VALLEY_STREAK.1;
+            params.rock_c.w = VALLEY_STREAK.2;
             if sea_y.is_finite() {
                 params.sea = Vec4::new(sea_y, ICE_OVER_M, ICE_FADE_M, -2.0);
             }
@@ -380,6 +391,16 @@ pub fn material(
         base: StandardMaterial {
             perceptual_roughness: 0.92,
             reflectance: super::fresnel::DIELECTRIC,
+            // A valley's walls stand sheer between the sun and the floor:
+            // a face that shows the sun its back must still cast, or the
+            // sun reaches the foot of the wall that shades the lane. Both
+            // faces are drawn into the cascades (the sheet is closed from
+            // above, so no back is ever seen).
+            cull_mode: if snow && !isle {
+                None
+            } else {
+                Some(bevy::render::render_resource::Face::Back)
+            },
             ..default()
         },
         extension: Ground { albedo, normal, params },

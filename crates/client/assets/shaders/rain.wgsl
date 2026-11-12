@@ -25,6 +25,9 @@ struct Rain {
     // x: a streak's width, m. y: its opacity at its middle. z: 1 a round
     // flake (snow), 0 a streak. w: the shelter's radius (read on the CPU).
     shape: vec4<f32>,
+    // The roof the eye stands under, a box in the plan (x0, z0, x1, z1):
+    // nothing falls inside it. Empty in the open.
+    roof: vec4<f32>,
 }
 
 @group(#{MATERIAL_BIND_GROUP}) @binding(0) var<uniform> rain: Rain;
@@ -85,7 +88,10 @@ fn vertex(in: VertexIn) -> VertexOut {
     let edge = max(max(abs(wrapped.x) / half.x, abs(wrapped.z) / half.z), abs(wrapped.y) / half.y);
     // Under a roof, none near the eye (Gates' shelter): a metre's fade.
     let clear = rain.look.w;
-    let open = select(1.0, smoothstep(clear, clear + 1.0, length(wrapped.xz)), clear > 0.0);
+    var open = select(1.0, smoothstep(clear, clear + 1.0, length(wrapped.xz)), clear > 0.0);
+    // And none anywhere under that roof: a metre's fade in from its edge.
+    let in_roof = min(min(head.x - rain.roof.x, rain.roof.z - head.x), min(head.z - rain.roof.y, rain.roof.w - head.z));
+    open = open * (1.0 - smoothstep(0.0, 1.0, in_roof));
     let fade = alive * open * (1.0 - smoothstep(0.7, 1.0, edge));
 
     var world = along + side * in.uv.x;

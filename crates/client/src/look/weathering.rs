@@ -102,6 +102,9 @@ pub struct Block {
     /// a solid does not, since an arc's turned segments overlap at their
     /// ends and two values on one plane would flicker.
     pub own_value: bool,
+    /// Whether its top is open to the sky (nothing built over its middle):
+    /// where snow settles on a map that snows.
+    pub open: bool,
 }
 
 /// The ground's samples along a long block ([`Block::run`]).
@@ -157,6 +160,11 @@ const SOIL: [f32; 3] = [0.62, 0.55, 0.47];
 /// else; linear albedo, inside the dull band. **(knob)**
 const SAND_DUST: [f32; 3] = [0.42, 0.29, 0.19];
 const GREY_DUST: [f32; 3] = [0.3, 0.29, 0.27];
+/// Snow settled on what faces up under an open sky, in a valley that
+/// snows (`level::Land::Alpine`): a step under the ground's own snow, and
+/// how much of a top it takes (the patches between are scoured bare).
+const SNOW_SETTLE: [f32; 3] = [0.74, 0.78, 0.86];
+const SNOW_SETTLE_SHARE: f32 = 1.0;
 /// How far one block's value may sit from the next, either way.
 const BLOCK_VALUE: f32 = 0.07;
 /// How far up the grime reaches from the ground, m.
@@ -231,8 +239,9 @@ pub fn block_value(mid: Vec3) -> f32 {
 }
 
 /// The uniform for a block of `surface`: `dusty` outdoors on a dusty map,
-/// `roofed` under a roof.
-pub fn params(surface: Surface, b: &Block, dusty: bool, roofed: bool) -> WeatherParams {
+/// `roofed` under a roof, `snowy` in a valley that snows (its open tops
+/// carry snow, not dust).
+pub fn params(surface: Surface, b: &Block, dusty: bool, roofed: bool, snowy: bool) -> WeatherParams {
     let Recipe {
         mottle,
         streak,
@@ -244,8 +253,21 @@ pub fn params(surface: Surface, b: &Block, dusty: bool, roofed: bool) -> Weather
         rough,
         dust,
     } = recipe(surface);
-    let dust_rgb = if dusty && !roofed { SAND_DUST } else { GREY_DUST };
-    let dust = if roofed { dust * ROOFED_DUST } else { dust };
+    let settles = snowy && b.open && !roofed;
+    let dust_rgb = if settles {
+        SNOW_SETTLE
+    } else if dusty && !roofed {
+        SAND_DUST
+    } else {
+        GREY_DUST
+    };
+    let dust = if settles {
+        SNOW_SETTLE_SHARE
+    } else if roofed {
+        dust * ROOFED_DUST
+    } else {
+        dust
+    };
     let shape = match b.shape {
         Shape::Box => 1.0,
         Shape::Round => 2.0,
@@ -290,11 +312,18 @@ pub fn seal(b: &Block) -> bool {
 }
 
 /// `base` weathered as a block of `surface`.
-pub fn material(base: StandardMaterial, surface: Surface, b: &Block, dusty: bool, roofed: bool) -> LevelMaterial {
+pub fn material(
+    base: StandardMaterial,
+    surface: Surface,
+    b: &Block,
+    dusty: bool,
+    roofed: bool,
+    snowy: bool,
+) -> LevelMaterial {
     ExtendedMaterial {
         base,
         extension: Weathering {
-            params: params(surface, b, dusty, roofed),
+            params: params(surface, b, dusty, roofed, snowy),
         },
     }
 }
@@ -328,6 +357,7 @@ mod tests {
             run: None,
             hidden: 0,
             own_value: true,
+            open: true,
         }
     }
 
@@ -338,7 +368,7 @@ mod tests {
     fn the_stains_stay_in_the_band() {
         for s in ALL {
             for (dusty, roofed) in [(false, false), (true, false), (true, true)] {
-                let p = params(s, &block(), dusty, roofed);
+                let p = params(s, &block(), dusty, roofed, false);
                 assert!(p.mottle.x > 0.0 && p.mottle.x < 0.25, "{s:?}");
                 assert!(p.streak_tint.truncate().max_element() <= 1.0, "{s:?}");
                 assert!(p.grime_tint.truncate().max_element() <= 1.0, "{s:?}");

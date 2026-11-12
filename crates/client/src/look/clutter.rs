@@ -80,6 +80,10 @@ const FLOWER_CLUMP_R: f32 = 0.3;
 /// ([`drift`]) a drift starts and is whole: a few percent of a meadow.
 const FLOWER_SHARE: f32 = 0.42;
 const FLOWER_DRIFT: (f32, f32) = (0.6, 0.74);
+/// A valley's stones through its snow: this share of them anywhere, all of
+/// them where the patch noise passes from `SNOW_DRIFT.0` to `.1`.
+const SNOW_SCATTER: f32 = 0.06;
+const SNOW_DRIFT: (f32, f32) = (0.5, 0.68);
 /// Flowers want turf: none where the grass's share of the ground is under
 /// this.
 const FLOWER_TURF: f32 = 0.45;
@@ -169,11 +173,35 @@ const ISLE_SAND: Grows = Grows {
     plant: 0.025,
 };
 
+/// A valley's snow (`level::Land::Alpine`): dark stones showing through
+/// it and a dry plant here and there, gathered in drifts (`snow_drift`) and
+/// thin between, so a lane stays clean snow and a hollow is peppered.
+const SNOW_FIELD: Grows = Grows {
+    pebble: 0.2,
+    stone: 0.07,
+    twig: 0.01,
+    plant: 0.03,
+};
+
+/// What ground the clutter lies on: the canyon's soils, an island's bare
+/// sandstone, a valley's snow.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Soil {
+    Canyon,
+    Isle,
+    Snow,
+}
+
 impl Grows {
     /// The ground's weights (`level::splat`'s sand, grass, gravel; rock
-    /// grows nothing) over the three; an island's sand is its own.
-    fn at(w: [f32; 4], isle: bool) -> Grows {
-        let sand = if isle { &ISLE_SAND } else { &SAND };
+    /// grows nothing) over the three; an island's sand and a valley's snow
+    /// are their own.
+    fn at(w: [f32; 4], soil: Soil) -> Grows {
+        let sand = match soil {
+            Soil::Canyon => &SAND,
+            Soil::Isle => &ISLE_SAND,
+            Soil::Snow => &SNOW_FIELD,
+        };
         let mix = |f: fn(&Grows) -> f32| w[0] * f(sand) + w[1] * f(&GRASSLAND) + w[2] * f(&GRAVEL);
         Grows {
             pebble: mix(|g| g.pebble),
@@ -197,6 +225,10 @@ const ISLE_PALE_STONE_C: u32 = 0xd6c4a6;
 /// Red rock fallen off the canyon's walls (the rock look's tint over its
 /// photograph, `level::dress`), on the sand.
 const RED_ROCK_C: u32 = 0x9c6448;
+/// A valley's stones through its snow: cold dark granite, two shades, the
+/// boulders' own (`boulders::COLD_TINT`), dark against white.
+const COLD_STONE_C: u32 = 0x4a4c52;
+const COLD_DARK_STONE_C: u32 = 0x34363c;
 const TWIG_C: u32 = 0x5a4630;
 /// A twig the sun has had for years, on the sand.
 const BLEACHED_TWIG_C: u32 = 0x857a6c;
@@ -471,6 +503,14 @@ fn dry_plant(s: &mut Soup, at: Vec3, seed: u32) {
 /// How much of a flower drift (x, z) is in, 0..1: the meadow's own patch
 /// noise read elsewhere and broader, so the drifts are not the grass's
 /// patches.
+/// How much of a valley's snow shows its stones at (x, z), 0..1: a few
+/// everywhere, and drifts of them where the meadow's patch noise, read
+/// elsewhere and broader, runs high.
+fn snow_drift(x: f32, z: f32) -> f32 {
+    let n = grass::patch(x * 0.45 - 53.0, z * 0.45 + 29.0);
+    SNOW_SCATTER + (1.0 - SNOW_SCATTER) * ((n - SNOW_DRIFT.0) / (SNOW_DRIFT.1 - SNOW_DRIFT.0)).clamp(0.0, 1.0)
+}
+
 pub(crate) fn drift(x: f32, z: f32) -> f32 {
     let n = grass::patch(x * 0.7 + 91.0, z * 0.7 - 37.0);
     ((n - FLOWER_DRIFT.0) / (FLOWER_DRIFT.1 - FLOWER_DRIFT.0)).clamp(0.0, 1.0)
@@ -563,8 +603,17 @@ fn piece_of(g: &Grows, r: f32) -> Option<Piece> {
 }
 
 /// One piece of `kind` at `at` on ground of weights `w`, `seed` its own;
-/// on an island (`isle`) its stone is the island's pale sandstone.
-fn piece(s: &mut Soup, kind: Piece, at: Vec3, w: [f32; 4], seed: u32, isle: bool) {
+/// on an island its stone is the island's pale sandstone, in a valley's
+/// snow cold dark granite.
+fn piece(s: &mut Soup, kind: Piece, at: Vec3, w: [f32; 4], seed: u32, soil: Soil) {
+    let isle = soil == Soil::Isle;
+    let cold_stone = || {
+        if hash01(seed, 13) < 0.5 {
+            COLD_STONE_C
+        } else {
+            COLD_DARK_STONE_C
+        }
+    };
     let yaw = hash01(seed, 9) * TAU;
     let k = |(lo, hi): (f32, f32)| lo + (hi - lo) * hash01(seed, 8);
     // Which of its ground's colours, dithered by the weights.
@@ -585,7 +634,9 @@ fn piece(s: &mut Soup, kind: Piece, at: Vec3, w: [f32; 4], seed: u32, isle: bool
     };
     match kind {
         Piece::Pebble => {
-            let c = if isle && ground == 0 {
+            let c = if soil == Soil::Snow {
+                cold_stone()
+            } else if isle && ground == 0 {
                 isle_stone()
             } else {
                 [SANDSTONE_C, MEADOW_STONE_C, GRANITE_C][ground]
@@ -594,6 +645,7 @@ fn piece(s: &mut Soup, kind: Piece, at: Vec3, w: [f32; 4], seed: u32, isle: bool
         }
         Piece::Stone => {
             let c = match ground {
+                _ if soil == Soil::Snow => cold_stone(),
                 0 if isle => isle_stone(),
                 0 if hash01(seed, 13) < 0.5 => RED_ROCK_C,
                 0 => SANDSTONE_C,
@@ -651,15 +703,15 @@ pub fn clear(map: &sim::map::Map, t: &TerrainDef) -> Clear {
 /// The clutter for a map's terrain: a mesh per block and density layer
 /// (`grass::LAYER_SHARE`, the GRASS row's), its centre and its layer.
 /// Nothing lies where `clear` says, on the rock, or off the ground's edge.
-/// An island (`isle`) is bare sandstone: its sand's own pieces, no creek
-/// and no turf.
+/// An island is bare sandstone: its sand's own pieces, no creek and no
+/// turf. A valley's snow: its stones and dry plants, in drifts.
 pub fn blocks(
     t: &TerrainDef,
     lo: (f32, f32),
     hi: (f32, f32),
     seed: u32,
     clear: &Clear,
-    isle: bool,
+    soil: Soil,
 ) -> Vec<(Mesh, Vec2, u8)> {
     let mut out = Vec::new();
     let n = (BLOCK_M / STEP_M).round() as u32;
@@ -688,11 +740,15 @@ pub fn blocks(
                     let (Some(y), Some(sl)) = (grass::ground(t, x, z), slope(t, x, z)) else {
                         continue;
                     };
-                    let w = if isle {
-                        crate::level::splat_bare(sl, y)
-                    } else {
-                        crate::level::splat(sl, y)
+                    let w = match soil {
+                        Soil::Canyon => crate::level::splat(sl, y),
+                        Soil::Isle => crate::level::splat_bare(sl, y),
+                        Soil::Snow => crate::level::splat_snow(sl),
                     };
+                    // Through snow, in drifts: most of the field is clean.
+                    if soil == Soil::Snow && hash01(cell, 17) > snow_drift(x, z) {
+                        continue;
+                    }
                     // Nothing on the rock, nor where its skin starts to grow over the
                     // ground (`cliffs.rs`): a pebble there would sink under it.
                     if w[3] >= super::cliffs::SKIN_ROCK_LO {
@@ -702,7 +758,7 @@ pub fn blocks(
                     if w[1] >= FLOWER_TURF && hash01(cell, 15) < drift(x, z) * FLOWER_SHARE {
                         flowers(&mut soups[layer_of(hash01(cell, 16))], t, Vec3::new(x, y, z), cell);
                     }
-                    let Some(kind) = piece_of(&Grows::at(w, isle), hash01(cell, 3)) else {
+                    let Some(kind) = piece_of(&Grows::at(w, soil), hash01(cell, 3)) else {
                         continue;
                     };
                     piece(
@@ -711,7 +767,7 @@ pub fn blocks(
                         Vec3::new(x, y, z),
                         w,
                         cell,
-                        isle,
+                        soil,
                     );
                 }
             }
@@ -791,14 +847,15 @@ mod tests {
                 (Piece::Twig, STONE_MAX_H),
                 (Piece::Plant, CLUTTER_MAX_H),
             ] {
-                for (w, isle) in [
-                    ([1.0, 0.0, 0.0, 0.0], false),
-                    ([0.0, 1.0, 0.0, 0.0], false),
-                    ([0.0, 0.0, 1.0, 0.0], false),
-                    ([1.0, 0.0, 0.0, 0.0], true),
+                for (w, soil) in [
+                    ([1.0, 0.0, 0.0, 0.0], Soil::Canyon),
+                    ([0.0, 1.0, 0.0, 0.0], Soil::Canyon),
+                    ([0.0, 0.0, 1.0, 0.0], Soil::Canyon),
+                    ([1.0, 0.0, 0.0, 0.0], Soil::Isle),
+                    ([1.0, 0.0, 0.0, 0.0], Soil::Snow),
                 ] {
                     let mut s = Soup::default();
-                    piece(&mut s, kind, at, w, seed.wrapping_mul(2_654_435_761), isle);
+                    piece(&mut s, kind, at, w, seed.wrapping_mul(2_654_435_761), soil);
                     let (top, sway, rigid) = measure(&s, at.y);
                     assert!(top > 0.0 && top <= cap, "{kind:?} seed {seed}: {top} m over the ground");
                     if kind == Piece::Plant {
@@ -832,20 +889,21 @@ mod tests {
 
     #[test]
     fn the_rolls_share_out_by_the_ground() {
-        let g = Grows::at([0.0, 0.0, 1.0, 0.0], false);
+        let g = Grows::at([0.0, 0.0, 1.0, 0.0], Soil::Canyon);
         assert_eq!(g, GRAVEL);
         assert_eq!(piece_of(&g, 0.0), Some(Piece::Pebble));
         assert_eq!(piece_of(&g, GRAVEL.pebble + 0.01), Some(Piece::Stone));
         assert_eq!(piece_of(&g, 0.99), None);
         assert_eq!(
-            Grows::at([0.0, 0.0, 0.0, 1.0], false),
+            Grows::at([0.0, 0.0, 0.0, 1.0], Soil::Canyon),
             Grows::default(),
             "rock grows nothing"
         );
-        assert_eq!(Grows::at([1.0, 0.0, 0.0, 0.0], true), ISLE_SAND);
+        assert_eq!(Grows::at([1.0, 0.0, 0.0, 0.0], Soil::Isle), ISLE_SAND);
+        assert_eq!(Grows::at([1.0, 0.0, 0.0, 0.0], Soil::Snow), SNOW_FIELD);
         for w in [[1.0, 0.0, 0.0, 0.0], [0.0, 1.0, 0.0, 0.0], [0.0, 0.0, 1.0, 0.0]] {
-            for isle in [false, true] {
-                let g = Grows::at(w, isle);
+            for soil in [Soil::Canyon, Soil::Isle, Soil::Snow] {
+                let g = Grows::at(w, soil);
                 assert!(g.pebble + g.stone + g.twig + g.plant < 1.0);
             }
         }
@@ -861,7 +919,7 @@ mod tests {
         let t = def.terrain.as_ref().expect("terrain");
         let map = def.build();
         let clear = clear(&map, t);
-        let blocks = blocks(t, map.lo, map.hi, 17, &clear, false);
+        let blocks = blocks(t, map.lo, map.hi, 17, &clear, Soil::Canyon);
         assert!(!blocks.is_empty(), "a map with ground has clutter");
         let mut pts = 0usize;
         for (m, ..) in &blocks {
