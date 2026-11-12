@@ -1324,7 +1324,7 @@
     {
       "id": "hd-ice_terrace",
       "name": "Icefall: off red's terrace",
-      "what": "from the terrace's edge over the main door, at the gap in its parapet: the forecourt straight down, the north spur, the lake running off under the north wall",
+      "what": "from the terrace's lip at the gap in its parapet over the main door, looking north along it: the lip and the forecourt straight down beside it, the parapet running on ahead, the north spur, the lake running off under the north wall",
       "take": "a height to defend from: the parapet near, the forecourt and its spurs below, the lake going off into the air",
       "shoot": [
         "tools/hd.sh"
@@ -1380,7 +1380,7 @@
     {
       "id": "hd-ice_col",
       "name": "Icefall: red's massif from the col",
-      "what": "red's massif from the south side of the col: its sheer south flank at an angle, the way up its spine, the perch on its crest",
+      "what": "red's massif from the south knoll, across the moraine's lane: its sheer south flank at an angle with its foot on the floor, the way up its spine as its skyline, the perch on its crest",
       "take": "a rock that parts the lanes: faces nobody climbs, snow on its top, the way up its spine",
       "shoot": [
         "tools/hd.sh"
@@ -1456,7 +1456,7 @@
     {
       "id": "hd-ice_over",
       "name": "Icefall: from the air",
-      "what": "the middle from over the south wall: both massifs, the col's station, the lake beyond",
+      "what": "the valley from over its south-west corner, across the sun: both massifs with their shaded sides, the col's station between them, the lake beyond, the north wall to its crest",
       "take": "the valley read at a glance: three lanes, two massifs, the col between",
       "shoot": [
         "tools/hd.sh"
