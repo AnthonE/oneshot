@@ -975,6 +975,8 @@ fullscreen = true
         let (back, ..) = read(Some(&d));
         assert_eq!(back, Settings::default());
         let mut c = s;
+        // MEDIUM's bloom is the glow: two clicks down to off.
+        c.adjust(Knob::Bloom, -1);
         c.adjust(Knob::Bloom, -1);
         let t = text(&c, &Binds::default(), &Player::default(), 1, &[], &[]);
         assert!(t.contains("bloom = off") && t.contains("shadow_m"), "{t}");

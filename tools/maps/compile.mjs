@@ -174,7 +174,12 @@ export const LOOKS = ['wall', 'block', 'trim', 'red', 'blue', 'dark', 'rock', 'h
   // The arenas' built things and their floors (the client's look/built.rs): old brick, cut marble, asphalt, cast concrete and its dark, snow, flaking steel.
   'brick', 'marble', 'road', 'blast', 'blast_dark', 'snow', 'rust',
   // A turned box drawn as a wreck inside it (the client's look/boulders.rs): a car, a van.
-  'wreck_car', 'wreck_van'];
+  'wreck_car', 'wreck_van',
+  // A dock's other metals (the client's look/built.rs): deck plating a floor is laid in, a wall's smooth panels in a
+  // hull's grey or a side's paint, and ribbed sheet (cargo).
+  'plating', 'panel', 'panel_red', 'panel_blue', 'ribbed',
+  // A shed's inner sheet (Pithead's shaft houses): ribbed, painted, its tone the kit's.
+  'lining'];
 /** sim::arms, by the names map.json uses. */
 export const WEAPONS = { ar: 'AR', br: 'BR', magnum: 'MAGNUM', sniper: 'SNIPER', shotgun: 'SHOTGUN', rocket: 'ROCKET', smg: 'SMG', sword: 'SWORD',
   carbine: 'CARBINE', beam_rifle: 'BEAM_RIFLE', ion_rifle: 'ION_RIFLE', ion_pistol: 'ION_PISTOL', shards: 'SHARDS',

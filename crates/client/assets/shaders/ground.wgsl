@@ -641,7 +641,10 @@ fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> Fragment
     // so the triangles' teeth never draw along the cliff's foot. A
     // world-space noise moves the threshold so the edge wanders like scree.
     // Nothing is sampled under this branch.
-    let tan_tilt = sin_tilt / max(cos_tilt, 0.05);
+    // The steeper of the normal's tilt and the triangle's own: at a wall's
+    // foot the normal is half the floor's, and a triangle with one corner
+    // up the wall kept the floor's soil, a comb of teeth up the rock.
+    let tan_tilt = max(sin_tilt / max(cos_tilt, 0.05), p_sin / max(abs(pn.y), 0.05));
     let reach = ground.cliff.z * 0.5;
     if tan_tilt > ground.cliff.x - reach {
         var cn = 0.0;

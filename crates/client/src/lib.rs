@@ -216,6 +216,17 @@ type KeptVis<'w, 's> = Query<
     ),
 >;
 
+/// What `draw_fighters` reads beside the bodies: the clock, whose feet
+/// press the grass and stand on the floor (`look/foliage.rs`,
+/// `look/shade.rs`), a film, and who is seen.
+type FighterParts<'w> = (
+    Res<'w, Time>,
+    ResMut<'w, look::foliage::Walkers>,
+    Option<Res<'w, film::Film>>,
+    Res<'w, Seen>,
+    ResMut<'w, look::shade::Under>,
+);
+
 /// What a body is made of, and the kept ones' visibility.
 type BodyParts<'w, 's> = (
     ResMut<'w, Assets<Mesh>>,
@@ -602,6 +613,7 @@ fn app_on(link: Box<dyn Link>, opts: Opts, first: Screen) -> App {
     .init_resource::<look::mood::SkyClock>()
     .init_resource::<look::mood::Drift>()
     .init_resource::<look::shafts::Shafts>()
+    .init_resource::<look::shade::Under>()
     .init_resource::<look::fx::ambient::Ambient>()
     .init_resource::<look::shafts::WebShafts>()
     .init_resource::<look::cliffs::SkinLift>()
@@ -639,6 +651,7 @@ fn app_on(link: Box<dyn Link>, opts: Opts, first: Screen) -> App {
             look::rain::setup,
             look::rainbow::setup,
             look::shafts::setup,
+            look::shade::setup,
         ),
     )
     // The sky after the level is built for its map: the clock, the drift
@@ -696,6 +709,7 @@ fn app_on(link: Box<dyn Link>, opts: Opts, first: Screen) -> App {
                 look::boulders::dress,
                 look::rig::grade_for,
                 look::built::dress,
+                look::floor_shade::lay.after(look::built::dress),
                 look::built::turn,
                 look::pool::dress,
             ),
@@ -769,6 +783,7 @@ fn app_on(link: Box<dyn Link>, opts: Opts, first: Screen) -> App {
         Update,
         (
             look::own_shadow::stream.after(draw_fighters),
+            look::shade::draw.after(draw_fighters),
             look::portrait::drag.before(look::portrait::stand),
             look::portrait::stand,
             look::portrait::activate,
@@ -1403,12 +1418,7 @@ fn draw_fighters(
     mut bodies: Query<&mut look::bodies::Body>,
     mut at: Query<&mut Transform>,
     (mut fx, mut tags, mut shells): ShieldParts,
-    (time, mut walkers, film, seen): (
-        Res<Time>,
-        ResMut<look::foliage::Walkers>,
-        Option<Res<film::Film>>,
-        Res<Seen>,
-    ),
+    (time, mut walkers, film, seen, mut under): FighterParts,
     crafts: Query<&look::craft::Craft>,
     mut scratch: Local<FighterScratch>,
 ) {
@@ -1500,6 +1510,18 @@ fn draw_fighters(
         {
             walkers.fighter(Vec3::new(d.pos.x, d.pos.y, d.pos.z));
         }
+    }
+    // The shade under everyone on their feet or in the air, ours too
+    // (`look/shade.rs`): never a seat, never a corpse.
+    under.0.clear();
+    if live && !third && f.alive && f.riding().is_none() {
+        under.0.push((Vec3::new(p.x, p.y, p.z), 1.0 - core.own_drawn().cloak));
+    }
+    for d in others
+        .iter()
+        .filter(|d| d.alive && seats.get(d.slot as usize).is_none_or(|s| s.is_none()))
+    {
+        under.0.push((Vec3::new(d.pos.x, d.pos.y, d.pos.z), 1.0 - d.cloak));
     }
     look::fx::bodies::watch_own(
         &mut fx,

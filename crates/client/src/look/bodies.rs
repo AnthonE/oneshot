@@ -343,10 +343,12 @@ pub fn stand_up(
         return;
     };
     for e in &waiting {
+        // A body gone this frame (the title's, a seat emptied) is still in
+        // the query: nothing to stand up.
         commands
             .entity(e)
-            .remove::<WantsScene>()
-            .insert(SceneRoot(scene.clone()));
+            .try_remove::<WantsScene>()
+            .try_insert(SceneRoot(scene.clone()));
     }
 }
 
