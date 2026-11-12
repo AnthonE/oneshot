@@ -340,8 +340,11 @@ impl Fighter {
         }
         let gunning = self.gunning(map);
         let shoots = seat != Some(crate::vehicle::DRIVER) && !self.flag && gunning == crate::vehicle::NO_TURRET;
-        // A pilot's guns are cold while it boosts (Halo 2's).
-        let boosting = seat == Some(crate::vehicle::DRIVER) && inp.held(CROUCH);
+        // A pilot's guns are cold while it boosts (Halo 2's): boost held
+        // with the stick ahead, as the hull boosts (`Vehicle::tank`; its
+        // tank is the world's, not ours to read). Held standing still, it
+        // fires.
+        let boosting = seat == Some(crate::vehicle::DRIVER) && inp.held(CROUCH) && inp.mz > 0;
         out.mounted = self.mount.step(gunning, inp.held(FIRE) && !boosting);
         self.shots = self.shots.wrapping_add(out.mounted as u32);
         dec(&mut self.mount.bomb);

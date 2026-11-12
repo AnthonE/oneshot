@@ -152,6 +152,9 @@ pub const BLAST_FLASH: FlashDef = FlashDef {
     color: [1.0, 0.62, 0.3],
 };
 /// A shield cracking: a cold blue blink.
+/// A craft's bolt's burst where it lands, times the plasma layer's size.
+pub const BOLT_BURST: f32 = 0.4;
+
 pub const ZAP_FLASH: FlashDef = FlashDef {
     lumens: 60_000.0,
     range: 4.0,
@@ -361,7 +364,11 @@ impl Fx {
         }
         if let Some(tone) = weapon.tone() {
             if lod > 0.0 && matter != Matter::Shield {
-                let big = if weapon == Weapon::Beam { 0.5 } else { 0.3 };
+                let big = match weapon {
+                    Weapon::Beam => 0.5,
+                    Weapon::Bolt => BOLT_BURST,
+                    _ => 0.3,
+                };
                 self.energy(at + away * 0.05, tone, big, 1);
             }
         }

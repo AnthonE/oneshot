@@ -169,6 +169,7 @@ pub fn kind(weapon: Weapon, matter: Matter) -> Option<(Kind, f32)> {
         (Weapon::Blade, Matter::Dirt) => (Kind::ScuffSoil, SIZE_M * 1.5),
         (Weapon::Blade, _) => (Kind::Gash, SIZE_M * 1.4),
         (Weapon::Carbine, _) => (Kind::Scorch, BURN_M * 0.7),
+        (Weapon::Bolt, _) => (Kind::Scorch, BURN_M * 0.8),
         (Weapon::Beam, _) => (Kind::Scorch, BURN_M * 1.3),
         (_, Matter::Concrete) => (Kind::HoleStone, 0.15 * k),
         (_, Matter::Metal) => (Kind::HoleMetal, 0.12 * k),

@@ -515,3 +515,80 @@ fn a_rider_draws_its_co_rider_in_its_seat() {
         );
     }
 }
+
+/// A skimmer's pilot sees its own bolts: the rounds it predicts are drawn
+/// from its guns (the server's copies of its own shots are skipped as
+/// drawn already), not only a truck's bed turret's.
+#[test]
+fn a_pilot_draws_its_own_guns_rounds() {
+    let mut map = sim::maps::canyon::DEF.build();
+    map.vehicles.push(sim::map::VehicleSpawn {
+        pos: V3::new(-92.0, 0.0, -16.0),
+        yaw: 0,
+        respawn_ms: 30_000,
+        turret: sim::vehicle::NO_TURRET,
+        kind: sim::vehicle::SKIMMER,
+    });
+    let i = map.vehicles.len() - 1;
+    let rules = Rules {
+        score_limit: 1000,
+        time_limit_ms: 0,
+        loadout: [ION_PISTOL, MAGNUM],
+        ..Rules::big_team()
+    };
+    let mut room = Room::new(map.clone(), rules, 11, (5, 6));
+    room.passive_bots = true;
+    let (slot, out) = room.join_team(Name::new("t"), Look::default(), Some(0)).unwrap();
+    let Some((_, Msg::Welcome { tick, team, rules, .. })) = out.first().copied() else {
+        panic!("no welcome");
+    };
+    let mut core = NetCore::new(slot, team, tick, rules, map);
+    let mut buf = [0u8; MAX_DATAGRAM];
+    let (mut now, mut next_tick) = (0.0f64, 0.0f64);
+    let mut bolts = 0;
+    while now < 8000.0 {
+        if now < 3900.0 {
+            // Stood beside it until it is boarded.
+            let v = room.world.vehicles[i].pos;
+            let (x, z) = (v.x, v.z + 1.5);
+            room.world.fighters[slot as usize].body.pos = V3::new(x, room.world.map.ground(x, z), z);
+        }
+        while next_tick <= now {
+            let (snaps, _) = room.step(now);
+            for (seat, s) in snaps {
+                if seat == slot {
+                    let n = encode_snapshot(&s, &mut buf).unwrap();
+                    core.on_snapshot(now, &decode_snapshot(&buf[..n]).unwrap());
+                }
+            }
+            next_tick += TICK_MS;
+        }
+        let buttons = match now {
+            t if (4000.0..4040.0).contains(&t) => USE,
+            t if t > 5000.0 => FIRE,
+            _ => 0,
+        };
+        for m in core.update(
+            now,
+            Input {
+                buttons,
+                ..Input::default()
+            },
+        ) {
+            let n = encode_input(&m, &mut buf).unwrap();
+            room.on_input(slot, &decode_input(&buf[..n]).unwrap(), now);
+        }
+        bolts += core
+            .drain_events(now)
+            .iter()
+            .filter(|e| {
+                e.kind == sim::events::Kind::Shot as u8 && e.a == slot && e.c == sim::events::Cause::Bolts as u16
+            })
+            .count();
+        now += FRAME_MS;
+    }
+    assert_eq!(core.own().0.riding(), Some((i, DRIVER)));
+    let fired = room.world.fighters[slot as usize].shots;
+    assert!(fired > 10, "the server fired {fired}");
+    assert!(bolts as u32 + 2 >= fired, "{bolts} of its {fired} bolts drawn");
+}

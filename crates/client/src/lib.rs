@@ -967,14 +967,19 @@ fn pump(
     // A gun in each hand: ZOOM's button (Mouse 2, by default the left
     // hand's trigger too) is no scope.
     let now = link.0.now_ms();
-    let (dual, arm, driving, was, bomber) = {
+    let (dual, arm, driving, was, bomber, pilot) = {
         let core = &link.0.session().core;
         let f = core.own().0;
         let driving = f.riding().is_some_and(|(_, s)| s == sim::vehicle::DRIVER);
+        let at_controls = |kind: u8| {
+            f.riding().is_some_and(|(i, s)| {
+                s == sim::vehicle::DRIVER && core.map.vehicles.get(i).is_some_and(|d| d.kind == kind)
+            })
+        };
         // A flier's pilot drops its bomb on the left hand's trigger.
-        let bomber = f.riding().is_some_and(|(i, s)| {
-            s == sim::vehicle::DRIVER && core.map.vehicles.get(i).is_some_and(|d| d.kind == sim::vehicle::FLIER)
-        });
+        let bomber = at_controls(sim::vehicle::FLIER);
+        // A one-seater's pilot boosts on BOOST, not on crouch.
+        let pilot = bomber || at_controls(sim::vehicle::SKIMMER);
         let was = ScopeWas {
             arm: f.gun().arm,
             cur: f.cur,
@@ -989,6 +994,7 @@ fn pump(
             driving,
             f.alive.then_some(was),
             bomber,
+            pilot,
         )
     };
     // What takes the scope off (Halo 2's): any damage, a reload (a hot
@@ -1050,6 +1056,14 @@ fn pump(
     let on = |a: binds::Action| (grabbed && binds.pressed(a, &c)) as i32;
     let axis = |plus: binds::Action, minus: binds::Action| (on(plus) - on(minus)) * 127;
     let mut buttons = BUTTONS.iter().filter(|(a, _)| held(*a)).fold(0, |b, (_, v)| b | v);
+    // At a one-seater's controls the sim boosts on CROUCH: it comes from
+    // BOOST (Shift) there, and crouch's own key does nothing.
+    if pilot {
+        buttons &= !CROUCH;
+        if held(binds::Action::Boost) {
+            buttons |= CROUCH;
+        }
+    }
     // The click that took the mouse (`grab`) fires nothing until it's let go.
     if !mouse.pressed(MouseButton::Left) && !mouse.just_pressed(MouseButton::Left) {
         look.armed = true;

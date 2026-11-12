@@ -116,7 +116,7 @@ pub fn shot(fx: &mut Fx, scene: &Scene, e: &EventState, from: Vec3, to: Vec3) {
         // are not ours to know): what it does there is the hit's to draw
         // when the server tells it (`ours_met`, `hurt`).
         if kind.ray() && (scene.on_body.is_none() || arm == SHOTGUN) {
-            land(fx, scene, arm, from, dir, len, to);
+            land(fx, scene, Weapon::of_arm(arm), from, dir, len, to);
         }
         return;
     }
@@ -162,7 +162,9 @@ pub fn shot(fx: &mut Fx, scene: &Scene, e: &EventState, from: Vec3, to: Vec3) {
     if look.wake_s > 0.0 {
         table::wake(&mut fx.tracers, muzzle, to, look.wake_s, 0.0);
     }
-    land(fx, scene, arm, from, dir, len, to);
+    // A pilot's bolt lands as plasma, a turret's round as a rifle's.
+    let w = if pilot { Weapon::Bolt } else { Weapon::of_arm(arm) };
+    land(fx, scene, w, from, dir, len, to);
 }
 
 /// Siege: a tower's needle (the shard gun's pink, `to` where it met them),
@@ -178,7 +180,7 @@ pub fn siege_shot(fx: &mut Fx, scene: &Scene, arm: u8, from: Vec3, to: Vec3, hit
     let look = table::gun(arm);
     table::tracer(&mut fx.tracers, &look, from, to, TRACER_IN_M);
     if hit {
-        land(fx, scene, arm, from, dir, len, to);
+        land(fx, scene, Weapon::of_arm(arm), from, dir, len, to);
     }
 }
 
@@ -491,8 +493,7 @@ fn burn(fx: &mut Fx, o: &OwnFlash, at: Vec3, fwd: Vec3, scale: f32) {
 
 /// The far end of a round's line: what it met, what that throws, and the
 /// mark it leaves.
-fn land(fx: &mut Fx, scene: &Scene, arm: u8, from: Vec3, dir: Vec3, len: f32, to: Vec3) {
-    let w = Weapon::of_arm(arm);
+fn land(fx: &mut Fx, scene: &Scene, w: Weapon, from: Vec3, dir: Vec3, len: f32, to: Vec3) {
     match met(fx, scene, from, dir, len, to) {
         Some(Met::Face(hit, matter)) => fx.strike(scene.map, w, matter, &hit),
         Some(Met::Body(slot, Matter::Flesh)) => fx.bleed(scene.map, slot, w, to, dir),

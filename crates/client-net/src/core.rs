@@ -1331,17 +1331,16 @@ impl NetCore {
         });
     }
 
-    /// A round of the turret we gun, as predicted: from its muzzle on the
-    /// hull as drawn (where its barrels are on screen), to where our aim
-    /// meets the map.
+    /// A round of the turret we gun, or of our one-seater's guns, as
+    /// predicted: from its muzzle on the hull as drawn (where its barrels
+    /// are on screen), to where our aim meets the map. The gun is the
+    /// seat's (`Fighter::gunning`), as the server's: a pilot's guns are no
+    /// bed turret.
     fn own_turret_shot(&mut self) {
-        let (Some(v), Some((a, cause))) = (
-            self.drawn_hull(),
-            self.pred_v.and_then(|v| sim::vehicle::turret(v.turret)),
-        ) else {
+        let f = &self.pred;
+        let (Some(v), Some((a, cause))) = (self.drawn_hull(), sim::vehicle::turret(f.gunning(&self.map))) else {
             return;
         };
-        let f = &self.pred;
         let eye = f.eye();
         let dir = aim_dir(f.yaw, f.pitch);
         let t = self.map.ray(eye, dir, a.range);
@@ -1349,7 +1348,7 @@ impl NetCore {
             kind: sim::events::Kind::Shot as u8,
             a: self.slot,
             c: cause,
-            pos: v.muzzle(dir),
+            pos: v.gun_at(dir, f.shots),
             end: eye + dir * t,
             ..EventState::default()
         });
