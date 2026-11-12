@@ -139,9 +139,10 @@ const FAN_Y: vec2<f32> = vec2<f32>(6.0, 22.0);
 const BANK: vec2<f32> = vec2<f32>(0.05, 0.9);
 const BANK_EDGE_M: vec2<f32> = vec2<f32>(1.2, 3.5);
 const BANK_ROLL_M: f32 = 40.0;
-const LOW_SHELF: f32 = 0.45;
+const LOW_SHELF: f32 = 0.3;
+const LOW_RUN_M: f32 = 11.0;
 const TALL_THIN: f32 = 0.55;
-const TALL_THIN_SHARE: f32 = 0.85;
+const TALL_THIN_SHARE: f32 = 0.6;
 const CUT_UP: vec2<f32> = vec2<f32>(0.06, 0.09);
 const CUT_LIP: vec2<f32> = vec2<f32>(0.8, 0.3);
 const CUT_LIP_RUN_M: f32 = 16.0;
@@ -149,7 +150,7 @@ const CUT_BAND: f32 = 0.6;
 const CUT_JOINT_M: f32 = 9.0;
 const CUT_JOINT_SHARE: f32 = 0.45;
 const CUT_JOINT_DARK: f32 = 0.4;
-const CUT_TREAD: f32 = 0.35;
+const CUT_TREAD: f32 = 0.7;
 const BED_STEP_M: f32 = 2.4;
 const BED_STEP_AT: f32 = 0.62;
 const SNOW_ON_ROCK: f32 = 0.6;
@@ -542,7 +543,10 @@ fn ledge_snow(wp: vec3<f32>, by: f32, f: vec4<f32>, fp_m: f32, lean: f32) -> vec
     let run = value3(vec3<f32>(wp.x / LEDGE_RUN_M, f32(i) * 3.7, wp.z / LEDGE_RUN_M));
     // A shelf is there or it is not, and ends square: a depth that followed the run tapered every
     // shelf to a point at both ends (lenses on a sheer wall, pills from across the valley).
-    let depth = f.y * (0.3 + 0.7 * d.y) * (1.0 + LEAN_DEEP * lean) * ends * smoothstep(0.3, 0.34, run) * (0.75 + 0.25 * smoothstep(0.34, 0.7, run));
+    // The deep family's shelves have body; the thin family's are hairlines with a few deep among
+    // them (at one bold weight for both, a tall face wore a ladder of equal rungs).
+    let body = mix(0.15 + 0.85 * d.y * d.y, 0.3 + 0.7 * d.y, step(1.0, f.y));
+    let depth = f.y * body * (1.0 + LEAN_DEEP * lean) * ends * smoothstep(0.3, 0.34, run) * (0.75 + 0.25 * smoothstep(0.34, 0.7, run));
     // Never thinner than a pixel, and as much fainter.
     let deep = max(depth, fp_m);
     // Clean along the lip, ragged where it banks against the riser.
@@ -552,7 +556,9 @@ fn ledge_snow(wp: vec3<f32>, by: f32, f: vec4<f32>, fp_m: f32, lean: f32) -> vec
     let line = smoothstep(0.0, lip, up) * (1.0 - smoothstep(top * 0.7, top, up));
     // A family too thin to hold a pixel-deep line goes when a pixel is several of its depths:
     // its band's tone is left, and a far wall is not hatched with chalk.
-    let gone = smoothstep(1.5, 4.0, fp_m / f.y) * step(f.y, LEDGE_FAR_M);
+    // And when its beds are a few pixels apart, whatever their depth: by depth alone a far wall
+    // was lined paper.
+    let gone = max(smoothstep(1.5, 4.0, fp_m / f.y), 1.0 - smoothstep(4.0, 9.0, f.x / fp_m)) * step(f.y, LEDGE_FAR_M);
     return vec2<f32>(line * depth / deep * (1.0 - gone), shade);
 }
 
@@ -956,7 +962,9 @@ fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> Fragment
             let deep = ledge_snow(wp, by_deep, vec4<f32>(LEDGE_DEEP.x, mix(LEDGE_DEEP.y, CUT_LIP.x, cutf), mix(LEDGE_DEEP.z, CUT_LIP.y, cutf), mix(LEDGE_DEEP.w, CUT_LIP_RUN_M, step(0.5, cutf))), fp_m, lean) * riser;
             let low = 1.0 - face_tall;
             // A tall face keeps few of the thin family's lines (its bands' tone carries the beds).
-            let thin_f = vec4<f32>(LEDGE_THIN.xy, LEDGE_THIN.z * mix(TALL_THIN_SHARE, 1.0, low) * (1.0 - cutf), LEDGE_THIN.w);
+            // And a low face's stretches are short: at a wall's 26 m a massif's 40 m face was ruled
+            // edge to edge, five even contours on a dome.
+            let thin_f = vec4<f32>(LEDGE_THIN.xy, LEDGE_THIN.z * mix(TALL_THIN_SHARE, 1.0, low) * (1.0 - cutf), mix(LEDGE_THIN.w, LOW_RUN_M, step(0.5, low)));
             let thin = ledge_snow(wp, by_deep + 1.7, thin_f, fp_m, lean + LOW_SHELF * low) * riser;
             // The deep beds as bands: each its own tone, hard along its top (the lip its shelf lies on).
             let band = by_deep / LEDGE_DEEP.x - LIP_AT;
@@ -984,7 +992,10 @@ fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> Fragment
                 let jf = abs(fract(jx + 0.5) - 0.5);
                 let stands = step(draw3(cell_key(vec3<i32>(i32(floor(jx + 0.5)), bi, 9))).x, CUT_JOINT_SHARE);
                 let sheer = (1.0 - smoothstep(0.0, jw / CUT_JOINT_M, jf)) * stands;
-                c = c * (1.0 - CUT_JOINT_DARK * max(max(bench, sheer), 0.5 * course) * cutf * w.w) * (1.0 + CUT_TREAD * tread * cutf * w.w);
+                c = c * (1.0 - CUT_JOINT_DARK * max(max(bench, sheer), 0.5 * course) * cutf * w.w);
+                // A sawn bench is level and holds snow along its run: a line of it, broken at the sheer
+                // joints (a paler rock there was still dark, and nothing in the shade).
+                c = mix(c, snow_rock * ground.tint[0].rgb, CUT_TREAD * tread * (1.0 - sheer) * cutf * w.w);
             }
             // A buttress's nose is paler than the cleft beside it: the wall's
             // relief by tone, where the light is flat on it.

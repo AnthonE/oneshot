@@ -750,7 +750,7 @@ const ROCK_SLOPE: (f32, f32) = (0.45, 0.9);
 /// as board. Its brown taken out and the whole lifted to a pale cool grey:
 /// darker than the snow, a clear step paler than the rock it stands in,
 /// so a base is found without its door's colour.
-const ALPINE_CONCRETE: [f32; 3] = [1.55, 1.82, 2.25];
+const ALPINE_CONCRETE: [f32; 3] = [1.6, 1.9, 2.4];
 /// The same under a valley's snow (`Land::Alpine`): the vertices say rock
 /// only where the per-pixel veto (`look::ground::SNOW_CLIFF_TAN`, from 45°)
 /// already has, so the snow's edge is the pixel's, wandering with its

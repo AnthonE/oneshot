@@ -139,11 +139,12 @@ pub const ICE_TINT: [Vec4; 4] = [
 ];
 
 /// A valley's rock under snow (`level::Land::Alpine`), in the rock's lane:
-/// a dark neutral grey, another hue than the snow on it and not only
+/// a dark grey a little to the warm side (its fill is the snow's cold
+/// bounce: neutral, it took the snow's own blue in shade), another hue than the snow on it and not only
 /// another value (the island's is the snow's own blue), dark enough that
 /// through the valley's mist it still stands a quarter of the snow's value
 /// (at a third the walls were a mid grey and their snow lines chalk).
-pub const VALLEY_ROCK_TINT: Vec4 = Vec4::new(0.26, 0.25, 0.255, 1.0);
+pub const VALLEY_ROCK_TINT: Vec4 = Vec4::new(0.275, 0.25, 0.238, 1.0);
 /// And its snow, in the sand's lane: nearer neutral than the island's blue
 /// lift (which cancelled the sun's warmth on it), and a step brighter.
 pub const VALLEY_SNOW_TINT: Vec4 = Vec4::new(1.69, 1.68, 1.68, 1.0);

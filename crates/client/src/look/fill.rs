@@ -92,6 +92,17 @@ pub fn bounce_lux() -> [f32; 3] {
 pub const SNOW_ALBEDO: [f32; 3] = [0.70, 0.76, 0.88];
 pub const SNOW_LIT: f32 = 0.2;
 
+/// And the sky half over it, linear, at the sky's own luminance and under
+/// its peak: a deeper blue. A floor faces up and takes the sky's half
+/// alone, so with the canyon's sky a valley's shaded snow was a neutral
+/// grey beside its sunlit snow, where shade on snow is blue.
+pub const SNOW_SKY: [f32; 3] = [0.50, 0.725, 0.888];
+
+/// The sky half over snow.
+pub fn snow_sky_lux() -> [f32; 3] {
+    SNOW_SKY.map(|c| c * SKY_FILL_LUX)
+}
+
 /// The earth half over snow.
 pub fn snow_bounce_lux() -> [f32; 3] {
     let e = lux::DIRECT_SUNLIGHT * SUN_ELEVATION.sin() + SKY_FILL_LUX;
@@ -100,13 +111,13 @@ pub fn snow_bounce_lux() -> [f32; 3] {
 
 /// Irradiance arriving at a surface of world normal `n`, linear lux.
 pub fn fill_at(n: Vec3) -> [f32; 3] {
-    fill_over(n, bounce_lux())
+    fill_over(n, sky_lux(), bounce_lux())
 }
 
-/// The same over a ground that throws `ground` back.
-pub fn fill_over(n: Vec3, ground: [f32; 3]) -> [f32; 3] {
+/// The same under a sky that gives `sky`, over a ground that throws
+/// `ground` back.
+pub fn fill_over(n: Vec3, sky: [f32; 3], ground: [f32; 3]) -> [f32; 3] {
     let w = 0.5 + 0.5 * n.y.clamp(-1.0, 1.0);
-    let sky = sky_lux();
     [0, 1, 2].map(|c| ground[c] + (sky[c] - ground[c]) * w)
 }
 
@@ -136,22 +147,22 @@ pub fn cube_dir(face: usize, x: u32, y: u32, n: u32) -> Vec3 {
 
 /// The hemisphere, baked.
 pub fn cubemap(n: u32) -> Image {
-    cubemap_over(n, bounce_lux())
+    cubemap_over(n, sky_lux(), bounce_lux())
 }
 
 /// The hemisphere over snow, baked against the same peak (the snow's
 /// bounce is under it), so the light's intensity carries either.
 pub fn snow_cubemap(n: u32) -> Image {
-    cubemap_over(n, snow_bounce_lux())
+    cubemap_over(n, snow_sky_lux(), snow_bounce_lux())
 }
 
-fn cubemap_over(n: u32, ground: [f32; 3]) -> Image {
+fn cubemap_over(n: u32, sky: [f32; 3], ground: [f32; 3]) -> Image {
     let peak = peak_lux();
     let mut data = vec![0u8; (n * n * 6 * 4) as usize];
     for face in 0..6usize {
         for y in 0..n {
             for x in 0..n {
-                let f = fill_over(cube_dir(face, x, y, n), ground);
+                let f = fill_over(cube_dir(face, x, y, n), sky, ground);
                 let i = (((face as u32 * n + y) * n + x) * 4) as usize;
                 for c in 0..3 {
                     data[i + c] = (linear_to_srgb((f[c] / peak).clamp(0.0, 1.0)) * 255.0).round() as u8;
@@ -424,6 +435,10 @@ mod tests {
         assert!(luminance(snow) > luminance(bounce_lux()));
         assert!(luminance(sky_lux()) > luminance(snow));
         assert!(snow[2] > snow[0] && snow.iter().all(|v| *v <= peak_lux()));
+        // Its sky is the sky's own brightness, bluer, and under the same peak.
+        let (sky, over) = (luminance(sky_lux()), snow_sky_lux());
+        assert!((luminance(over) - sky).abs() < 0.02 * sky);
+        assert!(over[2] / over[0] > sky_lux()[2] / sky_lux()[0] && over.iter().all(|v| *v <= peak_lux()));
         // The cube's +Y face looks up.
         assert!(cube_dir(2, 16, 16, 32).y > 0.99);
     }

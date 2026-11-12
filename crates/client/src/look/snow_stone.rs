@@ -19,9 +19,9 @@ const SHADER: &str = "shaders/snow_stone.wgsl";
 /// or the air was all cap, a snow mound, and cover lost its dark; from 0.74
 /// a walker saw a hairline, a bare boulder among capped stones.
 pub const CAP_UP: (f32, f32) = (0.62, 0.84);
-/// The cap's colour, a shade under the field's snow so the boulder keeps an
-/// edge against it, and its roughness.
-pub const CAP_RGB: [f32; 3] = [0.74, 0.76, 0.8];
+/// The cap's colour, a clear step under the field's snow so the boulder
+/// keeps its round top against it, and its roughness.
+pub const CAP_RGB: [f32; 3] = [0.66, 0.69, 0.75];
 pub const CAP_ROUGH: f32 = 0.92;
 
 /// The uniform; each lane is named in `snow_stone.wgsl`.
