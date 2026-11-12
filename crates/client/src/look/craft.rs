@@ -6,8 +6,8 @@
 //! up-curled prow and an engine's mouth in each stern, its rider astride the
 //! saddle between them, his hands on its horns. The flier is a swift in
 //! its stoop: a beak, a glass blister, two long blades of wings held down
-//! and back from a bare hinge each, a forked tail with its engine's
-//! mouth between the prongs, its pilot unseen under the glass. Each is a
+//! and back from a bare hinge each, a shark's fin on its back over its
+//! engine's mouth, its pilot unseen under the glass. Each is a
 //! child of the entity `draw_vehicles` stands at the sim's hull (turned by
 //! its yaw); its body here takes the flier's nose and roll from the sim, and
 //! leans into a turn and bobs on its lift as looks of its own.
@@ -93,16 +93,12 @@ const LIGHT_M: f32 = 5.0;
 /// `tools/models/skimmer.py` raised them on their stalk).
 const SKIM_GRIPS: [Vec3; 2] = [Vec3::new(-0.18, 1.24, -0.285), Vec3::new(-0.18, 1.24, 0.285)];
 /// The streamers of light a craft's tail draws behind it at speed: where
-/// each leaves it, in the hull's frame (the tips of the flier's tail blades
-/// and of the skimmer's fins; measured on the models), then how wide it is,
+/// each leaves it, in the hull's frame (the tip of the flier's fin and of
+/// each of the skimmer's; measured on the models), then how wide it is,
 /// metres, and how long it lasts, seconds: short, a few metres of light at
 /// a boost's speed and never a beam down the screen from the chase camera.
-const FLY_TRAILS: ([Vec3; 2], f32, f32) = (
-    [Vec3::new(-2.26, 1.27, -0.87), Vec3::new(-2.26, 1.27, 0.87)],
-    0.09,
-    0.09,
-);
-const SKIM_TRAILS: ([Vec3; 2], f32, f32) = ([Vec3::new(-1.42, 1.0, -0.44), Vec3::new(-1.42, 1.0, 0.44)], 0.06, 0.09);
+const FLY_TRAILS: (&[Vec3], f32, f32) = (&[Vec3::new(-1.96, 2.38, 0.0)], 0.09, 0.09);
+const SKIM_TRAILS: (&[Vec3], f32, f32) = (&[Vec3::new(-1.42, 1.0, -0.44), Vec3::new(-1.42, 1.0, 0.44)], 0.06, 0.09);
 /// A trail is this many points; it is drawn from `TRAIL_FROM` m/s and whole
 /// by `TRAIL_FULL` (faint at a craft's own top speed, whole in a boost),
 /// and fades along its length as this power of what is left of it.

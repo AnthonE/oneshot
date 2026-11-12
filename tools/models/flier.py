@@ -6,12 +6,12 @@ over its pilot either side of a crest that carries one hairline of light
 from bill to tail; two long blades of wings held down and back, each one
 plane from a broad root to a point, plated along its spar, hung from a
 hinge's bare barrel in the body's flank and braced by two jacks under it,
-a pod with a lamp at its tip; a lance out of each wing's leading edge; two
-blades of a forked tail, curved up and out, with its engine's mouth, vaned,
-between them: from astern an X, the tail's two points over the wings' two.
-It is a machine and is lit like one: its engine, its lift's lenses, a lamp
-at each wing's tip and each tail blade's, and one hairline down its crest;
-nothing drawn on it in light. Its
+a pod with a lamp at its tip; a lance out of each wing's leading edge; and
+one tall fin on its back, a shark's, swept from behind its glass to a lamp
+at its tip over the engine's mouth, vaned, in its tail: from astern three
+blades, the fin up and the wings down and out. It is a machine and is lit
+like one: its engine, its lift's lenses, a lamp at each wing's tip and at
+its fin's, and one hairline down its crest; nothing drawn on it in light. Its
 plates lap like a wing case and are fastened down, its seams are cut by rule
 with dark iron in them, and its shade is traced into its colours: it carries
 no map.
@@ -106,16 +106,21 @@ JACKS = ((0.22, 1.3), (-0.22, 1.2))
 # The pod at its tip: how far it runs ahead of the tip's leading edge and
 # behind its trailing edge, and how thick.
 POD = (0.2, 0.12, 0.052)
-# The blades of its tail: from where to where, how far out they start and
-# how far they spread, how high they start and how far they rise; half
-# their width at its widest and their width along their length as shares of
-# it, how thin they are for it, and how far they are canted, degrees (their
-# outer edges high: from its own saddle a pilot sees their faces).
-BLADE = (-0.95, -2.28, 0.58, 0.3, 0.76, 0.52)
-BLADE_WIDE = 0.23
-BLADE_SHAPE = (0.45, 0.7, 0.88, 1.0, 1.0, 1.0, 0.86, 0.5, 0.1)
-BLADE_THIN = 0.2
-BLADE_CANT = 40
+# The fin on its back, foot to tip: its leading and trailing edges (x at
+# each height) and its thickness. A shark's: its leading edge swept from just
+# behind the glass, its trailing edge hollow, its tip over the tail's end and
+# as far over the blister as the blister is over the wings. Its foot is sunk
+# in the blister's spine. (It had a forked tail of two small blades there:
+# two stubs beside the mouth from the saddle, and nothing at all at range.)
+F_LE = curve((1.0, -0.08), (1.5, -0.6), (2.0, -1.26), (2.4, -1.84))
+F_TE = curve((1.0, -1.5), (1.5, -1.58), (2.0, -1.78), (2.4, -2.02))
+F_T = curve((1.0, 0.11), (1.6, 0.08), (2.4, 0.03))
+F_AT = (1.0, 1.25, 1.5, 1.75, 2.0, 2.22, 2.4)
+# Its spar and its rudder's hinge (shares of its chord, 0 its trailing
+# edge), the heights its two cross seams lie at, and from how high it is lit.
+F_SPAR, F_RUDDER = 0.55, 0.28
+F_RIBS = (1.72, 2.08)
+F_LIT = 2.3
 # The hoop of its frame over the glass: where along the craft.
 HOOP = 0.98
 # The lift's lenses under the wings' roots: where along the craft, how far
@@ -307,26 +312,38 @@ def lance(side):
     return [pod, pylon] + out
 
 
-def blade(side):
-    """A blade of the forked tail: a feather on a cant, its outer edge high,
-    lifting and spreading as it goes aft, broad to its last third and then a
-    point, its end alight; pale, as the bill's upper mandible is, so the
-    craft's two ends are its two pale things and the tail is not taken for
-    one more feather of a wing."""
-    x0, x1, y0, spread, z0, rise = BLADE
-    path = [(x0 + (x1 - x0) * k, side * (y0 + spread * k), z0 + rise * k ** 1.4) for k in np.linspace(0.0, 1.0, 9)]
-    cant = math.radians(BLADE_CANT)
-    o = solid(stem(path, [BLADE_WIDE * k for k in BLADE_SHAPE], n=8, material='shell', name='blade', flat=BLADE_THIN,
-                   thin=(0, -side * math.sin(cant), math.cos(cant))), 'blade')
-    return repaint(o, 'light', where=lambda q: X(q) < x1 + 0.07)
+def fin():
+    """The fin on its back: one blade creased down its two edges, cut into
+    plates as a wing is (a gap along its spar, a hairline at its rudder's
+    hinge, two across it), a paler strake proud of it ahead of the spar, the
+    rudder a tone of its own, and its tip's trailing corner a lamp: the
+    highest thing on the craft, and where its trail leaves."""
+    n = 12
+    o = solid(loft([foil(0.0, F_LE(z), F_TE(z), z, F_T(z), n=n, under=1.0, upright=True) for z in F_AT], 'shell_deep',
+                   ends=('flat', 'tip'), name='fin', sharp=(0, n // 2)), 'fin')
+    span = lambda q: F_LE(Z(q)) - F_TE(Z(q))
+    part = lambda q: (X(q) - F_TE(Z(q))) / span(q)
+    stay = lambda q: (part(q) - F_SPAR) * span(q)
+    hinge = lambda q: (part(q) - F_RUDDER) * span(q)
+    seam(o, stay, 0.036, 0.012, flat=0.5, within=lambda q: both(Z(q) - 1.42, F_RIBS[1] + 0.1 - Z(q)))
+    seam(o, hinge, **SEAM, within=lambda q: both(Z(q) - 1.42, F_RIBS[1] - Z(q)))
+    for z in F_RIBS:
+        seam(o, lambda q, z=z: Z(q) - z, **SEAM)
+    strake = plate(o, lambda q: both(stay(q) - 0.036, Z(q) - 1.46, F_RIBS[1] + 0.06 - Z(q)), 0.014, 'shell_pale', name='strake',
+                   clear=None)
+    repaint(o, 'shell', where=lambda q: (hinge(q) < -0.02) & (Z(q) > 1.44) & (Z(q) < F_RIBS[1] - 0.02), of='shell_deep')
+    repaint(o, 'light', where=lambda q: (Z(q) > F_LIT) & (part(q) < 0.5))
+    return [o, strake]
 
 
+parts += fin()
 for side in (1, -1):
-    parts += [blade(side)] + lance(side)
+    parts += lance(side)
 
 o = solid(parts, 'flier')
 # Its fasteners: a row each side of each shoulder's seam, an arc over its
-# back before the engine's cowl, and a row down each wing ahead of its spar.
+# back before the engine's cowl, a row down each wing ahead of its spar and
+# up each face of its fin.
 pins = []
 for side in (1, -1):
     for x in np.linspace(-1.3, 1.0, 7):
@@ -334,6 +351,8 @@ for side in (1, -1):
             pins.append((x, side * (0.6 - 0.2 * x + lean), B_TOP(x)))
     for y in np.linspace(1.08, 1.86, 5):
         pins.append((W_TE(y) + (SPAR + 0.09) * (W_LE(y) - W_TE(y)), side * y, W_Z(y) + W_T(y)))
+    for z in np.linspace(1.56, 2.0, 4):
+        pins.append((F_TE(z) + (F_SPAR + 0.1) * (F_LE(z) - F_TE(z)), side * 0.08, z))
 for a in np.linspace(0.12, math.pi - 0.12, 8):
     x = COWL + 0.075
     pins.append((x, 1.1 * B_WIDE(x) * math.cos(a), B_CHINE(x) + 1.1 * (B_TOP(x) - B_CHINE(x)) * math.sin(a)))
@@ -343,9 +362,10 @@ o = solid([o, studs(o, pins)], 'flier')
 def soot(q):
     """What is left of the paint: soot aft of the gills and round the mouth,
     and the mouth's lip blued by its heat."""
-    aft = np.clip((-1.05 - q[:, 0]) / 0.7, 0.0, 1.0) * (np.abs(q[:, 1]) < 0.5)
+    low = q[:, 2] < 1.1
+    aft = np.clip((-1.05 - q[:, 0]) / 0.7, 0.0, 1.0) * (np.abs(q[:, 1]) < 0.5) * low
     left = (1.0 - 0.45 * aft)[:, None] * np.ones((1, 3))
-    lip = (np.clip((TAIL + 0.12 - q[:, 0]) / 0.12, 0.0, 1.0) * (np.abs(q[:, 1]) < 0.5))[:, None]
+    lip = (np.clip((TAIL + 0.12 - q[:, 0]) / 0.12, 0.0, 1.0) * (np.abs(q[:, 1]) < 0.5) * low)[:, None]
     # And down each wing aft of its lance, where the gun's smoke lies.
     y = np.abs(q[:, 1])
     smoke = np.clip(1.0 - np.abs(y - GUNS[1]) / 0.22, 0.0, 1.0) * np.clip((W_LE(y) + 0.1 - q[:, 0]) / 0.5, 0.0, 1.0) * (y > 1.0)
@@ -358,7 +378,6 @@ gloss(o)
 
 r = sim('BODY_R')
 eye = Vector((SEAT[0], 0, SEAT[1] + sim('CROUCH_EYE')))
-x0, x1, y0, spread, z0, rise = BLADE
 deliver(
     'flier', o,
     # `Vehicle::hull`: its fuselage, and its wings' slab.
@@ -368,5 +387,5 @@ deliver(
     chase=(eye + Vector((-cam('FLY_CAM_BACK_M'), 0, cam('FLY_CAM_UP_M'))), eye + Vector((cam('CRAFT_CAM_MEET_M'), 0, 0))),
     # Its mouth's two halves and its middle, for the boost's flames.
     burns=[(TAIL, MW * 0.5, MZ), (TAIL, -MW * 0.5, MZ), (TAIL, 0.0, MZ)],
-    note='Veil flier: a swift in its stoop, two long blades of wings held down and back and a forked tail, a lance out of each '
-         f"wing, its engine a mouth between the blades; its tail's tips at x {x1}, y ±{y0 + spread:.2f}, z {z0 + rise:.2f}")
+    note="Veil flier: a swift in its stoop, two long blades of wings held down and back and a shark's fin on its back, a lance "
+         f"out of each wing, its engine a mouth in its tail; its fin's tip at x {F_TE(F_AT[-1]) + 0.06:.2f}, y 0, z {F_AT[-1]:.2f}")
