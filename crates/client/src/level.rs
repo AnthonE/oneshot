@@ -745,7 +745,7 @@ const ROCK_SLOPE: (f32, f32) = (0.45, 0.9);
 /// as board. Its brown taken out and the whole lifted to a pale cool grey:
 /// darker than the snow, a clear step paler than the rock it stands in,
 /// so a base is found without its door's colour.
-const ALPINE_CONCRETE: [f32; 3] = [1.45, 1.7, 2.1];
+const ALPINE_CONCRETE: [f32; 3] = [1.6, 1.88, 2.34];
 /// The same under a valley's snow (`Land::Alpine`): the vertices say rock
 /// only where the per-pixel veto (`look::ground::SNOW_CLIFF_TAN`, from 45°)
 /// already has, so the snow's edge is the pixel's, wandering with its
@@ -843,15 +843,25 @@ pub(crate) fn ground_point(t: &TerrainDef, i: usize, j: usize, land: Land) -> (f
             // hollow (the bank at its foot stands highest there).
             let tall = face_tall(t, x, z, dx, dz);
             let bank = (face_hollow(t, x, z, dx, dz, BANK_REACH_M) / BANK_FULL_M).clamp(0.0, 1.0);
-            (
-                (0.5 + face_hollow(t, x, z, dx, dz, HOLLOW_REACH_M) / HOLLOW_FULL_M).clamp(0.0, 1.0),
-                tall * (0.5 + 0.5 * bank),
-            )
+            // Beside a cut the hollow is the slot's own corner, not a
+            // couloir: read as one it drew a ruled thread down the corner.
+            let hollow = if near_cut(t, i, j) {
+                0.0
+            } else {
+                face_hollow(t, x, z, dx, dz, HOLLOW_REACH_M) / HOLLOW_FULL_M
+            };
+            ((0.5 + hollow).clamp(0.0, 1.0), tall * (0.5 + 0.5 * bank))
         } else {
             // Off a face the first lane is free: whole on a pressure
             // ridge, which the paint draws as ice and not as ground.
+            // And the second says how proud the ground stands (a crown
+            // under `CROWN_LANE.0`, a hollow over it, `CROWN_LANE.1` each
+            // way): all under where a face's own values start.
             let ridge = crate::look::grass::ice_ridge(t, x, z, lowest_cached(t));
-            (if ridge { 1.0 } else { 0.5 }, 0.0)
+            (
+                if ridge { 1.0 } else { 0.5 },
+                CROWN_LANE.0 - CROWN_LANE.1 * crate::look::grass::snow_crown(t, x, z),
+            )
         };
         return (
             slope,
@@ -949,6 +959,20 @@ fn face_tall(t: &TerrainDef, x: f32, z: f32, dx: f32, dz: f32) -> f32 {
 /// cell of plan for all their height, and every lane on them is a blend of
 /// its foot's and its rim's.
 const CUT_SLOPE: f32 = 17.0;
+/// Off a face, the second lane's middle and reach (`ground.wgsl` reads the
+/// same two).
+const CROWN_LANE: (f32, f32) = (0.05, 0.045);
+
+/// Whether a cut is within a couloir's reach of vertex (i, j).
+fn near_cut(t: &TerrainDef, i: usize, j: usize) -> bool {
+    let (nx, nz) = (t.nx as usize, t.nz as usize);
+    let r = (HOLLOW_REACH_M / t.cell).ceil() as usize;
+    (j.saturating_sub(r)..=(j + r).min(nz - 1)).step_by(2).any(|b| {
+        (i.saturating_sub(r)..=(i + r).min(nx - 1))
+            .step_by(2)
+            .any(|a| cut(t, a, b))
+    })
+}
 
 fn cut(t: &TerrainDef, i: usize, j: usize) -> bool {
     let (nx, nz) = (t.nx as usize, t.nz as usize);

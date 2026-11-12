@@ -558,6 +558,7 @@ fn app_on(link: Box<dyn Link>, opts: Opts, first: Screen) -> App {
     .add_plugins(look::craft::plugin)
     .add_plugins(look::cloud_sea::plugin)
     .add_plugins(look::isle_stone::plugin)
+    .add_plugins(look::snow_stone::plugin)
     .add_plugins(look::pool::plugin)
     // The grass's and the clutter's wind, trails and fade (`look/foliage.rs`).
     .add_plugins(look::foliage::plugin)

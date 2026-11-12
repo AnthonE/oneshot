@@ -83,7 +83,7 @@ const FLOWER_DRIFT: (f32, f32) = (0.6, 0.74);
 /// A valley's stones through its snow: this share of them anywhere, all of
 /// them where its snow lies thin (`grass::snow_thin`, its tufts' own rule
 /// and the ground's).
-const SNOW_SCATTER: f32 = 0.04;
+const SNOW_SCATTER: f32 = 0.06;
 /// Flowers want turf: none where the grass's share of the ground is under
 /// this.
 const FLOWER_TURF: f32 = 0.45;
@@ -177,8 +177,8 @@ const ISLE_SAND: Grows = Grows {
 /// it and a dry plant here and there, gathered in drifts (`snow_drift`) and
 /// thin between, so a lane stays clean snow and a hollow is peppered.
 const SNOW_FIELD: Grows = Grows {
-    pebble: 0.34,
-    stone: 0.24,
+    pebble: 0.42,
+    stone: 0.32,
     twig: 0.012,
     plant: 0.03,
 };
@@ -230,11 +230,11 @@ const RED_ROCK_C: u32 = 0x9c6448;
 const COLD_STONE_C: u32 = 0x4a4c52;
 const COLD_DARK_STONE_C: u32 = 0x34363c;
 /// The snow lying on a stone's top in a valley (its facets steeper to the
-/// sky than `CAP_UP`: its ridge alone; a stone is a low lump, and at 0.45
-/// every facet of it was white on white), a shade under the field's own so
+/// sky than `CAP_UP`: its top; a stone is a low lump, at 0.45 every facet
+/// of it was white on white and at 0.8 none was), a shade under the field's own so
 /// the stone still has an edge against it.
 const SNOW_CAP_C: u32 = 0xd4d9e2;
-const CAP_UP: f32 = 0.8;
+const CAP_UP: f32 = 0.64;
 const TWIG_C: u32 = 0x5a4630;
 /// A twig the sun has had for years, on the sand.
 const BLEACHED_TWIG_C: u32 = 0x857a6c;

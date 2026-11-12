@@ -297,7 +297,7 @@ const COLD_DRY: (f32, f32) = (0.006, 0.34);
 /// A pressure ridge: ground under this much over the ice with the sheet
 /// this far to both sides of it.
 const RIDGE_UNDER_M: f32 = 2.2;
-const RUBBLE_OVER_ICE_M: f32 = 0.45;
+const RUBBLE_OVER_ICE_M: f32 = 0.15;
 const RIDGE_ACROSS_M: f32 = 7.0;
 const RIDGE_LOW_M: f32 = 8.0;
 const SNOW_GATHER: (f32, f32) = (0.5, 0.68);
@@ -392,6 +392,33 @@ pub(crate) fn snow_thin(t: &TerrainDef, x: f32, z: f32, ice: f32) -> f32 {
     let high = 1.0 - step(THIN_HIGH_M.0, THIN_HIGH_M.1, y - ice);
     let open = high * if face { FACE_THIN } else { 1.0 };
     (proud.max(flank) * patch * open).max(shore * (SHORE_FLOOR + (1.0 - SHORE_FLOOR) * reach))
+}
+
+/// How proud a valley's ground stands of the ground `THIN_REACH_M` round
+/// it at (x, z), -1 (a hollow, `CROWN_M` under it) to 1 (a crown, as far
+/// over): the snow's tone reads it (`ground.wgsl`), so a rise has a shape
+/// where no sun falls on it.
+const CROWN_M: f32 = 2.4;
+
+pub(crate) fn snow_crown(t: &TerrainDef, x: f32, z: f32) -> f32 {
+    let Some(y) = ground(t, x, z) else { return 0.0 };
+    let d = core::f32::consts::FRAC_1_SQRT_2 * THIN_REACH_M;
+    let r = THIN_REACH_M;
+    let round = [
+        (r, 0.0),
+        (-r, 0.0),
+        (0.0, r),
+        (0.0, -r),
+        (d, d),
+        (-d, d),
+        (d, -d),
+        (-d, -d),
+    ]
+    .iter()
+    .map(|(a, b)| ground(t, x + a, z + b).unwrap_or(y))
+    .sum::<f32>()
+        / 8.0;
+    ((y - round) / CROWN_M).clamp(-1.0, 1.0)
 }
 
 /// Whether (x, z) is on a pressure ridge: low ground with the sheet (at

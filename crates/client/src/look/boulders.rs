@@ -497,7 +497,7 @@ pub struct Stones {
     dry: Vec<Handle<StandardMaterial>>,
     wet: Vec<Handle<StandardMaterial>>,
     pale: Vec<Handle<StandardMaterial>>,
-    cold: Vec<Handle<StandardMaterial>>,
+    cold: Vec<Handle<super::snow_stone::SnowStoneMaterial>>,
     /// An island's scenery (`isle_stone.rs`): `pale` going into shade under
     /// its rim and lost in its cloud.
     hung: Vec<Handle<super::isle_stone::IsleStoneMaterial>>,
@@ -535,6 +535,7 @@ impl Stones {
         meshes: &Assets<Mesh>,
         mats: &mut Assets<StandardMaterial>,
         hung: &mut Assets<super::isle_stone::IsleStoneMaterial>,
+        capped: &mut Assets<super::snow_stone::SnowStoneMaterial>,
         far: Vec3,
     ) -> Option<bool> {
         if self.failed {
@@ -608,7 +609,9 @@ impl Stones {
             self.hung
                 .push(hung.add(super::isle_stone::material(pale.clone(), ISLE_SEA_Y, far)));
             self.pale.push(mats.add(pale));
-            self.cold.push(mats.add(cold));
+            // Snow lies on a rock's crown; a made thing is snowed by the level's own paint.
+            self.cold
+                .push(capped.add(super::snow_stone::material(cold, !(i == PYLON_MODEL || prop || wreck))));
         }
         Some(true)
     }
@@ -625,6 +628,7 @@ pub fn dress(
     meshes: Res<Assets<Mesh>>,
     mut mats: ResMut<Assets<StandardMaterial>>,
     mut hung: ResMut<Assets<super::isle_stone::IsleStoneMaterial>>,
+    mut capped: ResMut<Assets<super::snow_stone::SnowStoneMaterial>>,
     tier: Res<super::quality::Tier>,
     boulders: Query<(Entity, &Boulder)>,
     pylons: Query<(Entity, &Pylon)>,
@@ -641,7 +645,7 @@ pub fn dress(
         .color
         .to_linear();
     let far = Vec3::new(far.red, far.green, far.blue);
-    let Some(ok) = stones.ready(&server, &meshes, &mut mats, &mut hung, far) else {
+    let Some(ok) = stones.ready(&server, &meshes, &mut mats, &mut hung, &mut capped, far) else {
         return;
     };
     for (e, b) in &boulders {
@@ -662,20 +666,17 @@ pub fn dress(
         )>()
         .insert((
             Mesh3d(stones.meshes[model].clone()),
-            MeshMaterial3d(
-                if b.cold {
-                    &stones.cold
-                } else if b.pale {
-                    &stones.pale
-                } else {
-                    &stones.dry
-                }[model]
-                    .clone(),
-            ),
             block_transform(b.min, b.max, quarters),
             Bare(b.min, b.max),
             Dressed,
         ));
+        if b.cold {
+            ec.insert(MeshMaterial3d(stones.cold[model].clone()));
+        } else {
+            ec.insert(MeshMaterial3d(
+                if b.pale { &stones.pale } else { &stones.dry }[model].clone(),
+            ));
+        }
     }
     for (e, p) in &pylons {
         let mut ec = commands.entity(e);

@@ -151,6 +151,11 @@ pub const VALLEY_SNOW_TINT: Vec4 = Vec4::new(1.69, 1.68, 1.68, 1.0);
 /// longer and deeper than a canyon's 45 m (`rock_d`'s width and height m,
 /// `rock_c`'s strength), or it has no verticals at all from across a lane.
 pub const VALLEY_STREAK: (f32, f32, f32) = (2.6, 34.0, 0.18);
+/// Its blocks (`rock_a`): the canyon's sizes, leaning a third as far. A
+/// canyon's wall is read from 30 m; a valley's from 150, under a sun that
+/// rakes it, where a 7 m block leaning 40 degrees is a patch of camouflage
+/// and the wall a mottle with no beds.
+pub const VALLEY_ROCK_A: Vec4 = Vec4::new(ROCK_CELL_M, ROCK_FINE_M, 0.2, 0.12);
 
 pub const TINT: [Vec4; 4] = [
     Vec4::new(1.0, 1.1, 1.25, 1.0),
@@ -368,6 +373,7 @@ pub fn material(
             params.rock_d.x = VALLEY_STREAK.0;
             params.rock_d.y = VALLEY_STREAK.1;
             params.rock_c.w = VALLEY_STREAK.2;
+            params.rock_a = VALLEY_ROCK_A;
             if sea_y.is_finite() {
                 params.sea = Vec4::new(sea_y, ICE_OVER_M, ICE_FADE_M, -2.0);
             }
