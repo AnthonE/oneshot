@@ -33,14 +33,17 @@
 //! MEDIUM through WebGL2's clamps is what the WebGL2 module drew (SMAA,
 //! one cascade to 120 m, the same grass, its smaller spark pool). A fresh
 //! install opens on the rung its target drew ([`default_quality_on`]), and
-//! the tests hold both columns.
+//! the tests hold both columns. One row has moved since: its bloom is
+//! light off what emits ([`Glow::Glow`], [`GLOW`]), on MEDIUM too, where
+//! it shipped as a veil of the whole frame over itself. The pass is the
+//! same one at the same cost; the veil took a seventh of every edge's
+//! contrast and left a strip or a lamp no brighter than the wall beside it.
 //!
 //! **ULTRA is HIGH with the finish a GPU with room to spare can pay for**,
-//! chosen, never opened on: every lamp, strip and flash blooms as a light
-//! ([`Glow::Glow`], [`GLOW`]) where HIGH lays a veil of the whole frame
-//! over itself, the shade is drawn at 4096 (half HIGH's texel at the far
-//! edge) and the contact shading is SSAO's HIGH. Nothing WebGL2 can draw:
-//! through its clamps ULTRA is HIGH, and its QUALITY row stops there.
+//! chosen, never opened on: the shade is drawn at 4096 (half HIGH's texel
+//! at the far edge) and the contact shading is SSAO's HIGH. Nothing WebGL2
+//! can draw: through its clamps ULTRA is HIGH, and its QUALITY row stops
+//! there.
 //!
 //! **Fairness: no rung sees anyone another hides.** Wherever something
 //! can hide a fighter, every rung draws the same:
@@ -138,8 +141,8 @@ pub enum Quality {
     /// The desktop's frame as it shipped.
     #[default]
     High,
-    /// HIGH with a GPU's spare room spent on finish: lights that bloom as
-    /// lights ([`Glow::Glow`]), the shade at 4096, SSAO's HIGH.
+    /// HIGH with a GPU's spare room spent on finish: the shade at 4096,
+    /// SSAO's HIGH.
     Ultra,
 }
 named!(Quality {
@@ -185,8 +188,9 @@ named!(Aa {
     Taa = "taa",
 });
 
-/// What bloom does to the frame (Bevy's): nothing, the veil HIGH shipped
-/// with, or light off whatever is brighter than a lit wall ([`GLOW`]).
+/// What bloom does to the frame (Bevy's): nothing, the veil HIGH first
+/// shipped with (a row can still choose it), or light off whatever is
+/// brighter than a lit wall ([`GLOW`]), which the presets with bloom use.
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Default, Hash)]
 pub enum Glow {
     #[default]
@@ -316,13 +320,12 @@ pub const fn max_shadow_map_px() -> usize {
 /// out, never one cost raised to pay for another (`tests` hold that).
 pub fn preset_on(q: Quality, webgl2: bool) -> Gfx {
     match q {
-        // HIGH's rows, and three of them a step up. The distance stays: a
+        // HIGH's rows, and two of them a step up. The distance stays: a
         // further shade is a coarser one, and the map's own floor
         // ([`MapShade`]) already carries it across the big maps.
         Quality::Ultra => Gfx {
             shadow_map_px: 4096,
             ao: Ao::High,
-            bloom: Glow::Glow,
             ..preset_on(Quality::High, webgl2)
         },
         Quality::High => Gfx {
@@ -331,7 +334,7 @@ pub fn preset_on(q: Quality, webgl2: bool) -> Gfx {
             shadow_map_px: 2048,
             ao: Ao::Medium,
             aa: Aa::Taa,
-            bloom: Glow::On,
+            bloom: Glow::Glow,
             render_scale: RENDER_SCALE_MAX,
             effects: Effects::High,
             clouds: Clouds::High,
@@ -342,7 +345,7 @@ pub fn preset_on(q: Quality, webgl2: bool) -> Gfx {
             shadow_map_px: 2048,
             ao: Ao::Low,
             aa: Aa::Taa,
-            bloom: Glow::On,
+            bloom: Glow::Glow,
             render_scale: RENDER_SCALE_MAX,
             effects: Effects::Low,
             // The second budget spent by target: the WebGL2 module opens
@@ -792,7 +795,7 @@ fn dress(e: &mut EntityCommands, t: &Tier) {
     }
 }
 
-/// ULTRA's bloom: light off what emits, added to the frame, where
+/// The presets' bloom: light off what emits, added to the frame, where
 /// `Bloom::NATURAL` blends the whole frame with its own blur (a veil over
 /// everything, and a lamp no brighter for it).
 ///
@@ -881,7 +884,8 @@ mod tests {
         ladder.iter().position(|x| x == v).expect("on its ladder")
     }
 
-    /// The golden: HIGH is the desktop's frame as it shipped
+    /// The golden: HIGH is the desktop's frame as it shipped, its bloom
+    /// since made light off what emits
     /// (`gpu::tier_for` before this ladder: SSAO medium, TAA, bloom, four
     /// cascades to 200 m, no shadow map size set so Bevy's own, grass to
     /// `grass::DRAW_M`, the desktop's fx caps), and MEDIUM through WebGL2's
@@ -899,7 +903,7 @@ mod tests {
         assert!(t.atmosphere);
         assert_eq!(t.ssao(), Some(SsaoLevel::Medium));
         assert_eq!(t.gfx.aa, Aa::Taa);
-        assert_eq!(t.gfx.bloom, Glow::On);
+        assert_eq!(t.gfx.bloom, Glow::Glow);
         assert_eq!((t.gfx.cascades, t.shadow_m), (4, 200.0));
         assert_eq!(t.gfx.shadow_map_px, DirectionalLightShadowMap::default().size);
         assert_eq!((t.gfx.effects, t.gfx.render_scale), (Effects::High, 100));
@@ -926,9 +930,9 @@ mod tests {
     }
 
     /// ULTRA is HIGH and finish: the same shade over the same ground, the
-    /// same edges, sparks and sky, with only the shade's map, the contact
-    /// shading and the bloom a step up; a fresh install never opens on it;
-    /// and WebGL2, which can draw none of the three, draws HIGH.
+    /// same edges, sparks, glow and sky, with only the shade's map and the
+    /// contact shading a step up; a fresh install never opens on it; and
+    /// WebGL2, which can draw neither, draws HIGH.
     #[test]
     fn ultra_is_high_and_finish() {
         let (h, u) = (preset_on(Quality::High, false), preset_on(Quality::Ultra, false));
@@ -936,7 +940,6 @@ mod tests {
             Gfx {
                 shadow_map_px: h.shadow_map_px,
                 ao: h.ao,
-                bloom: h.bloom,
                 ..u
             },
             h
@@ -1154,7 +1157,7 @@ mod tests {
         let high = preset_on(Quality::High, false);
         let e = effective_on(high, false, FLOOR);
         assert_eq!((e.ao, e.aa), (Ao::Off, Aa::Smaa));
-        assert_eq!(e.bloom, Glow::On);
+        assert_eq!(e.bloom, Glow::Glow);
         let one = GpuCaps {
             sampled_textures: gpu::FRAGMENT_TEXTURES + 2,
             storage_textures: 8,
