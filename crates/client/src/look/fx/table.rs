@@ -1045,8 +1045,11 @@ pub const BOLTS: GunLook = GunLook {
     width: 0.05,
     px: 9.0,
     dash: false,
-    flash_c: [2.0, 5.0, 14.0, 1.0],
-    flash_scale: 0.9,
+    // A hot blue core that keeps its colour with no bloom, not a white
+    // puck: ten a second in front of its pilot, the bloom's plasma carries
+    // the shape.
+    flash_c: [0.7, 2.0, 5.5, 1.0],
+    flash_scale: 0.7,
     light_lm: 110_000.0,
     ..RIFLE
 };
