@@ -146,11 +146,11 @@ pub const ICE_TINT: [Vec4; 4] = [
 pub const VALLEY_ROCK_TINT: Vec4 = Vec4::new(0.26, 0.25, 0.255, 1.0);
 /// And its snow, in the sand's lane: nearer neutral than the island's blue
 /// lift (which cancelled the sun's warmth on it), and a step brighter.
-pub const VALLEY_SNOW_TINT: Vec4 = Vec4::new(1.64, 1.67, 1.74, 1.0);
+pub const VALLEY_SNOW_TINT: Vec4 = Vec4::new(1.69, 1.68, 1.68, 1.0);
 /// Its faces' streaks: a wall a hundred metres high wants them broader,
 /// longer and deeper than a canyon's 45 m (`rock_d`'s width and height m,
 /// `rock_c`'s strength), or it has no verticals at all from across a lane.
-pub const VALLEY_STREAK: (f32, f32, f32) = (2.6, 34.0, 0.3);
+pub const VALLEY_STREAK: (f32, f32, f32) = (2.6, 34.0, 0.18);
 
 pub const TINT: [Vec4; 4] = [
     Vec4::new(1.0, 1.1, 1.25, 1.0),

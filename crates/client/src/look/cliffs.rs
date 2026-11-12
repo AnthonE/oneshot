@@ -210,14 +210,13 @@ pub fn skin(
             let sw = shade_weight(l);
             // The rock's identity takes over as the skin grows.
             let keep = 1.0 - sw;
-            // Under snow the grass's lane is no weight but how tall the
-            // face is (`level::face_tall`): carried whole.
-            let lane = if land == crate::level::Land::Alpine {
-                col[1]
+            // Under snow only the rock's lane is a weight; the others are
+            // what the paint reads (`level::ground_point`): carried whole.
+            if land == crate::level::Land::Alpine {
+                cols.push([col[0], col[1], col[2], col[3] * keep + sw]);
             } else {
-                col[1] * keep
-            };
-            cols.push([col[0] * keep, lane, col[2] * keep, col[3] * keep + sw]);
+                cols.push([col[0] * keep, col[1] * keep, col[2] * keep, col[3] * keep + sw]);
+            }
             ngs.push(ng);
             vals.push(1.0 + (rock::relief_value(p, local, key) - 1.0) * sw);
             shades.push(sw);

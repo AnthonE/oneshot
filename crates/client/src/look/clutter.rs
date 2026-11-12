@@ -81,8 +81,9 @@ const FLOWER_CLUMP_R: f32 = 0.3;
 const FLOWER_SHARE: f32 = 0.42;
 const FLOWER_DRIFT: (f32, f32) = (0.6, 0.74);
 /// A valley's stones through its snow: this share of them anywhere, all of
-/// them where its ground shows (`grass::snow_gather`, its tufts' own rule).
-const SNOW_SCATTER: f32 = 0.06;
+/// them where its snow lies thin (`grass::snow_thin`, its tufts' own rule
+/// and the ground's).
+const SNOW_SCATTER: f32 = 0.04;
 /// Flowers want turf: none where the grass's share of the ground is under
 /// this.
 const FLOWER_TURF: f32 = 0.45;
@@ -176,8 +177,8 @@ const ISLE_SAND: Grows = Grows {
 /// it and a dry plant here and there, gathered in drifts (`snow_drift`) and
 /// thin between, so a lane stays clean snow and a hollow is peppered.
 const SNOW_FIELD: Grows = Grows {
-    pebble: 0.3,
-    stone: 0.16,
+    pebble: 0.34,
+    stone: 0.24,
     twig: 0.012,
     plant: 0.03,
 };
@@ -505,8 +506,8 @@ fn dry_plant(s: &mut Soup, at: Vec3, seed: u32) {
 /// How much of a valley's snow shows its stones at (x, z), 0..1: a few
 /// everywhere, and drifts of them where the meadow's patch noise, read
 /// elsewhere and broader, runs high.
-fn snow_drift(x: f32, z: f32) -> f32 {
-    SNOW_SCATTER + (1.0 - SNOW_SCATTER) * grass::snow_gather(x, z)
+fn snow_drift(t: &TerrainDef, x: f32, z: f32, ice: f32) -> f32 {
+    SNOW_SCATTER + (1.0 - SNOW_SCATTER) * grass::snow_open(t, x, z, ice)
 }
 
 pub(crate) fn drift(x: f32, z: f32) -> f32 {
@@ -713,6 +714,8 @@ pub fn blocks(
 ) -> Vec<(Mesh, Vec2, u8)> {
     let mut out = Vec::new();
     let n = (BLOCK_M / STEP_M).round() as u32;
+    // A valley's ice: its lowest ground (`level.rs`).
+    let ice = crate::level::lowest(t);
     let mut bz = lo.1;
     while bz < hi.1 {
         let mut bx = lo.0;
@@ -744,7 +747,7 @@ pub fn blocks(
                         Soil::Snow => crate::level::splat_snow(sl),
                     };
                     // Through snow, in drifts: most of the field is clean.
-                    if soil == Soil::Snow && hash01(cell, 17) > snow_drift(x, z) {
+                    if soil == Soil::Snow && hash01(cell, 17) > snow_drift(t, x, z, ice) {
                         continue;
                     }
                     // Nothing on the rock, nor where its skin starts to grow over the

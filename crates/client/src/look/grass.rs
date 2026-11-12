@@ -289,10 +289,28 @@ const DUNE_ABOVE_SEA_M: f32 = 1.3;
 const ISLE_DRY: (f32, f32) = (0.03, 0.3);
 const ISLE_DRIFT: (f32, f32) = (0.45, 0.72);
 /// A snowed valley's (`cold`): next to none on clean snow, and stands of
-/// them where its snow lies thin and its stones show ([`snow_gather`]), so
-/// tufts and stones are one patch of ground and not two scatters.
-const COLD_DRY: (f32, f32) = (0.008, 0.26);
+/// them where its snow lies thin ([`snow_thin`]: the ground's colour in
+/// `ground.wgsl`, its stones in `clutter.rs` and these tufts all read it),
+/// so tufts and stones stand on ground that shows and are not two scatters
+/// on clean snow.
+const COLD_DRY: (f32, f32) = (0.006, 0.34);
 const SNOW_GATHER: (f32, f32) = (0.5, 0.68);
+/// Where a valley's snow lies thin. On what stands proud of the ground
+/// `THIN_REACH_M` round it (a crown, a shoulder, a spur's crest: from
+/// `THIN_PROUD_M.0` m proud to whole at `.1`); less on a flank (a slope
+/// from `THIN_SLOPE.0` to `.1`, `THIN_FLANK` of it); and up from the ice
+/// (from `THIN_OVER_ICE_M.0` over it, whole there, to none `.1` higher,
+/// where the sheet is within `THIN_SHORE_M`): a shore and an islet are
+/// ground and stones, the wind's doing. In patches (`THIN_PATCH` of it
+/// anywhere, all of it where the gather noise runs high); a lane's floor
+/// and a forecourt lie flat and low and stay clean.
+const THIN_REACH_M: f32 = 10.0;
+const THIN_PROUD_M: (f32, f32) = (0.3, 1.5);
+const THIN_SLOPE: (f32, f32) = (0.18, 0.4);
+const THIN_FLANK: f32 = 0.6;
+const THIN_OVER_ICE_M: (f32, f32) = (0.05, 1.6);
+const THIN_SHORE_M: f32 = 12.0;
+const THIN_PATCH: f32 = 0.55;
 
 /// How much of a snowed valley's ground shows through at (x, z), 0..1: the
 /// meadow's patch noise read elsewhere and broader. Its tufts and its
@@ -300,6 +318,64 @@ const SNOW_GATHER: (f32, f32) = (0.5, 0.68);
 pub(crate) fn snow_gather(x: f32, z: f32) -> f32 {
     let n = patch(x * 0.45 - 53.0, z * 0.45 + 29.0);
     ((n - SNOW_GATHER.0) / (SNOW_GATHER.1 - SNOW_GATHER.0)).clamp(0.0, 1.0)
+}
+
+/// How thin a snowed valley's snow lies at (x, z), 0..1, over ice at `ice`.
+pub(crate) fn snow_thin(t: &TerrainDef, x: f32, z: f32, ice: f32) -> f32 {
+    let Some(y) = ground(t, x, z) else { return 0.0 };
+    if y < ice + THIN_OVER_ICE_M.0 {
+        return 0.0;
+    }
+    let step = |a: f32, b: f32, v: f32| {
+        let k = ((v - a) / (b - a)).clamp(0.0, 1.0);
+        k * k * (3.0 - 2.0 * k)
+    };
+    let at = |dx: f32, dz: f32| ground(t, x + dx, z + dz).unwrap_or(y);
+    let slope = ((at(1.0, 0.0) - at(-1.0, 0.0)) * 0.5).hypot((at(0.0, 1.0) - at(0.0, -1.0)) * 0.5);
+    // Rock's, not snow's (`level::SNOW_ROCK_SLOPE`).
+    if slope > 1.1 {
+        return 0.0;
+    }
+    let d = core::f32::consts::FRAC_1_SQRT_2;
+    let ring = [
+        (1.0, 0.0),
+        (-1.0, 0.0),
+        (0.0, 1.0),
+        (0.0, -1.0),
+        (d, d),
+        (-d, d),
+        (d, -d),
+        (-d, -d),
+    ];
+    let round = ring
+        .iter()
+        .map(|(a, b)| at(a * THIN_REACH_M, b * THIN_REACH_M))
+        .sum::<f32>()
+        / 8.0;
+    let proud = step(THIN_PROUD_M.0, THIN_PROUD_M.1, y - round);
+    let flank = THIN_FLANK * step(THIN_SLOPE.0, THIN_SLOPE.1, slope);
+    let by_ice = ring.iter().any(|(a, b)| {
+        at(a * THIN_SHORE_M, b * THIN_SHORE_M) < ice + THIN_OVER_ICE_M.0
+            || at(a * THIN_SHORE_M * 0.5, b * THIN_SHORE_M * 0.5) < ice + THIN_OVER_ICE_M.0
+    });
+    let shore = if by_ice {
+        1.0 - step(0.0, THIN_OVER_ICE_M.1, y - ice - THIN_OVER_ICE_M.0)
+    } else {
+        0.0
+    };
+    let patch = THIN_PATCH + (1.0 - THIN_PATCH) * snow_gather(x, z);
+    (proud.max(flank) * patch).max(shore * (0.55 + 0.45 * patch))
+}
+
+/// How much of the ground shows through a valley's snow at (x, z), 0..1:
+/// where [`snow_thin`] passes from `OPEN.0` to `.1`, as the ground's paint
+/// opens its windows (`ground.wgsl`'s scour, a noise against the same
+/// lane), so cover stands on ground that shows and not on clean snow.
+const OPEN: (f32, f32) = (0.3, 0.75);
+
+pub(crate) fn snow_open(t: &TerrainDef, x: f32, z: f32, ice: f32) -> f32 {
+    let k = ((snow_thin(t, x, z, ice) - OPEN.0) / (OPEN.1 - OPEN.0)).clamp(0.0, 1.0);
+    k * k * (3.0 - 2.0 * k)
 }
 
 /// How much grass grows at (x, z): (green, dry), each 0..1. The splat's own
@@ -312,11 +388,15 @@ fn growth(t: &TerrainDef, x: f32, z: f32, sea: f32, isle: bool, cold: bool) -> O
     let dx = ground(t, x + 0.5, z)? - ground(t, x - 0.5, z)?;
     let dz = ground(t, x, z + 0.5)? - ground(t, x, z - 0.5)?;
     let slope = (dx * dx + dz * dz).sqrt();
+    if cold {
+        // Down to the ice's edge (no swash to keep clear of), none on the sheet.
+        if slope > 0.55 || y < sea + THIN_OVER_ICE_M.0 {
+            return None;
+        }
+        return Some((0.0, COLD_DRY.0 + (COLD_DRY.1 - COLD_DRY.0) * snow_open(t, x, z, sea)));
+    }
     if slope > 0.55 || y < sea + DUNE_ABOVE_SEA_M {
         return None;
-    }
-    if cold {
-        return Some((0.0, COLD_DRY.0 + (COLD_DRY.1 - COLD_DRY.0) * snow_gather(x, z)));
     }
     if isle {
         let drift = ((patch(x, z) - ISLE_DRIFT.0) / (ISLE_DRIFT.1 - ISLE_DRIFT.0)).clamp(0.0, 1.0);

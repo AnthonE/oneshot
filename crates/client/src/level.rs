@@ -818,13 +818,23 @@ pub(crate) fn ground_point(t: &TerrainDef, i: usize, j: usize, land: Land) -> (f
         return (slope, splat_in(slope, y, 0.0, 0.0));
     }
     if land == Land::Alpine {
-        // Under snow: drifts where it lies, rock where it stands. Nothing
-        // grows, so the grass's lane says how tall the face it stands in is.
-        let mut w = splat_snow(slope);
-        if slope > SNOW_ROCK_SLOPE.0 * 0.6 {
-            w[1] = face_tall(t, i, j);
-        }
-        return (slope, w);
+        // Under snow: drifts where it lies, rock where it stands, and the
+        // rock's lane says which (the snow's is one less it). Nothing
+        // grows and no creek runs, so the other three carry what the
+        // paint reads (`ground.wgsl`): how far into a couloir a face is,
+        // how tall the face is, how thin the snow lies.
+        let rock = splat_snow(slope)[3];
+        let (x, z) = (t.x0 + i as f32 * t.cell, t.z0 + j as f32 * t.cell);
+        let on_face = slope > SNOW_ROCK_SLOPE.0 * 0.6;
+        return (
+            slope,
+            [
+                if on_face { face_hollow(t, x, z, dx, dz) } else { 0.5 },
+                if on_face { face_tall(t, i, j) } else { 0.0 },
+                crate::look::grass::snow_thin(t, x, z, lowest_cached(t)),
+                rock,
+            ],
+        );
     }
     let cover = crate::look::grass::cover(t.x0 + i as f32 * t.cell, t.z0 + j as f32 * t.cell, y);
     (slope, splat_in(slope, y, trough, cover))
@@ -884,6 +894,59 @@ fn face_tall(t: &TerrainDef, i: usize, j: usize) -> f32 {
     let fall = (hi as f32 - lo as f32) / HEIGHT_Q;
     let k = ((fall - FACE_TALL_M.0) / (FACE_TALL_M.1 - FACE_TALL_M.0)).clamp(0.0, 1.0);
     k * k * (3.0 - 2.0 * k)
+}
+
+/// How far into a couloir the face at (x, z) is, 0..1 (a half: a plane;
+/// more: the wall each side stands higher; less: a buttress's nose), read
+/// `HOLLOW_UP_M` up the fall line (`dx`, `dz`: the ground's slope there),
+/// where the wall's ribs stand whole, so a couloir's line carries down to
+/// the foot: the ground `HOLLOW_REACH_M` to each side along the wall over
+/// the ground between, `HOLLOW_FULL_M` of it for the whole lane.
+const HOLLOW_UP_M: f32 = 8.0;
+const HOLLOW_REACH_M: f32 = 9.0;
+const HOLLOW_FULL_M: f32 = 12.0;
+
+fn face_hollow(t: &TerrainDef, x: f32, z: f32, dx: f32, dz: f32) -> f32 {
+    let len = dx.hypot(dz);
+    if len < 1e-3 {
+        return 0.5;
+    }
+    let (ux, uz) = (dx / len, dz / len);
+    let (qx, qz) = (x + ux * HOLLOW_UP_M, z + uz * HOLLOW_UP_M);
+    let at = |a: f32, b: f32| crate::look::grass::ground(t, a, b);
+    let (Some(mid), Some(l), Some(r)) = (
+        at(qx, qz),
+        at(qx - uz * HOLLOW_REACH_M, qz + ux * HOLLOW_REACH_M),
+        at(qx + uz * HOLLOW_REACH_M, qz - ux * HOLLOW_REACH_M),
+    ) else {
+        return 0.5;
+    };
+    (0.5 + ((l + r) * 0.5 - mid) / HOLLOW_FULL_M).clamp(0.0, 1.0)
+}
+
+/// A terrain's lowest ground, m: a valley's ice.
+pub(crate) fn lowest(t: &TerrainDef) -> f32 {
+    t.heights
+        .iter()
+        .copied()
+        .min()
+        .map_or(f32::NEG_INFINITY, |q| q as f32 / HEIGHT_Q)
+}
+
+/// The same, kept for the terrain last asked about: a mesh asks once a vertex.
+fn lowest_cached(t: &TerrainDef) -> f32 {
+    use core::cell::Cell;
+    thread_local!(static LAST: Cell<(usize, f32)> = const { Cell::new((0, 0.0)) });
+    let key = t.heights.as_ptr() as usize;
+    LAST.with(|c| {
+        let (k, v) = c.get();
+        if k == key {
+            return v;
+        }
+        let v = lowest(t);
+        c.set((key, v));
+        v
+    })
 }
 
 /// The same under a valley's snow (`Land::Alpine`): snow (the sand's lane)

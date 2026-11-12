@@ -186,6 +186,8 @@ const HALL_OUT_M: f32 = 0.75;
 /// What grime at a block's foot multiplies by where snow lies against it:
 /// wet and cold, not the canyon's soil.
 const COLD_GRIME: [f32; 3] = [0.42, 0.46, 0.52];
+/// And how strong it is on a snowed valley's cast concrete.
+const SNOWY_GRIME: f32 = 0.75;
 
 /// How a surface weathers.
 #[derive(Clone, Copy, Debug)]
@@ -290,10 +292,15 @@ pub fn params(surface: Surface, b: &Block, dusty: bool, roofed: bool, snowy: boo
     };
     WeatherParams {
         mottle: Vec4::new(mottle, 0.65, 0.17, if b.own_value { block_value(b.mid) } else { 1.0 }),
-        streak: Vec4::new(streak, 2.2, 0.0, 0.0),
+        streak: Vec4::new(streak, 2.2, if settles { 1.0 } else { 0.0 }, 0.0),
         streak_tint: Vec4::new(tint[0], tint[1], tint[2], 0.0),
         grime: Vec4::new(
-            grime,
+            // A snowed valley's concrete is damp and dark over the snow at its foot.
+            if snowy && surface == Surface::Stone {
+                SNOWY_GRIME
+            } else {
+                grime
+            },
             GRIME_REACH_M,
             b.ground,
             match b.run {
