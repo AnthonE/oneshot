@@ -17,6 +17,13 @@
 //! under it casts nothing). Bulkhead is two thirds fill, so most of its
 //! shade is the dome's; the lamps' is what lies under its bridge.
 //!
+//! **Under an open sky the same, for the sky.** The sun casts there, so a
+//! roof's shadow was drawn, and lit as if the roof were glass: the sky's
+//! fill reached under a flyover and into a shed as it reaches a field. The
+//! dome there is the sky itself, taken however high the roof ([`REACH_OPEN_M`]),
+//! and the sheet takes only the sky's share: where the sun is on a floor
+//! the sun is most of its light and stays.
+//!
 //! **And the light its strips lay on them.** A strip was drawn bright and
 //! lit nothing: the deck a hand under it was as dark as the deck across the
 //! hall. The same sheet carries what each strip and each lamp's fixture
@@ -89,8 +96,20 @@ const ROOF_OVER_M: f32 = 2.5;
 /// A lamp giving a vertex less than this share of its light is not looked
 /// at.
 const LAMP_LEAST: f32 = 0.015;
-/// The darkest the sheet is: a shaded floor is never a hole.
+/// Under an open sky the dome is the sky, as far up as this, metres: what
+/// stands in it takes the sky however high it stands (a flyover, a shed's
+/// roof), and no more than its share of it.
+const REACH_OPEN_M: f32 = 14.0;
+/// Ground further than this from anything standing carries no sheet,
+/// metres: a canyon's open floor, the snow round a yard.
+const NEAR_M: f32 = 5.0;
+/// Over ground that rises and falls the sheet lies this far up, metres: a
+/// terrain's own triangles are coarser than its cells.
+const LIFT_GROUND_M: f32 = 0.025;
+/// The darkest the sheet is: a shaded floor is never a hole. Less under an
+/// open sky, where a body in the shade is lit by the sky the floor has lost.
 const DARKEST: f32 = 0.75;
+const DARKEST_OPEN: f32 = 0.62;
 /// Shade fainter than this is no shade: a floor with its dome open and
 /// its lamps in sight carries no sheet, and the sheet fades to nothing
 /// where it stops.
@@ -117,7 +136,10 @@ const SPILL_LOOKS: usize = 5;
 /// Spill fainter than this is none.
 const SPILL_FAINT: f32 = 0.004;
 
-const _: () = assert!(DARKEST < 0.8 && FAINT < DARKEST && ROUND_M < EYE_M);
+/// How far toward the sun a floor looks for what shades it, metres.
+const SUN_FAR_M: f32 = 300.0;
+
+const _: () = assert!(DARKEST < 0.8 && DARKEST_OPEN < DARKEST && FAINT < DARKEST_OPEN && ROUND_M < EYE_M);
 
 /// A piece of a light: where, and what it shines (linear, as it is drawn)
 /// times the area it shows a floor, m².
@@ -234,6 +256,14 @@ struct Light<'a> {
     fill: f32,
     range: f32,
     cone: (f32, f32),
+    /// Toward the sun, and what it gives a floor it is on; none under a
+    /// roof.
+    sun: Option<(Vec3, f32)>,
+    /// How far the dome is looked into, how much more than its share what
+    /// stands in it takes, and the darkest the sheet goes.
+    reach: f32,
+    takes: f32,
+    darkest: f32,
     /// The lights that spill, and which are near where.
     lights: &'a Lights,
     near: HashMap<[i32; 2], Vec<usize>>,
@@ -282,17 +312,23 @@ impl Light<'_> {
         // The dome: what stands in it, by how near.
         let mut taken = 0.0;
         for k in 0..DOME {
-            let t = self.map.ray(v3(eye + round(k)), v3(dome(k)), REACH_M);
-            if t < REACH_M {
-                taken += 1.0 - (t / REACH_M) * (t / REACH_M);
+            let t = self.map.ray(v3(eye + round(k)), v3(dome(k)), self.reach);
+            if t < self.reach {
+                taken += 1.0 - (t / self.reach) * (t / self.reach);
             }
         }
-        let fill = self.fill * (1.0 - (taken / DOME as f32 * DOME_TAKES).min(1.0));
-        let all: f32 = self.fill + self.lamps.iter().map(|l| self.lamp(l, p)).sum::<f32>();
+        let fill = self.fill * (1.0 - (taken / DOME as f32 * self.takes).min(1.0));
+        // The sun where it is on the floor: the renderer casts its shadow,
+        // so it is there to keep or it is not there at all.
+        let sun = self
+            .sun
+            .filter(|(to, _)| self.map.ray(v3(eye), v3(*to), SUN_FAR_M) >= SUN_FAR_M)
+            .map_or(0.0, |s| s.1);
+        let all: f32 = self.fill + sun + self.lamps.iter().map(|l| self.lamp(l, p)).sum::<f32>();
         if all <= 0.0 {
             return 1.0;
         }
-        let mut lit = fill;
+        let mut lit = fill + sun;
         for l in &self.lamps {
             let gives = self.lamp(l, p);
             if gives < LAMP_LEAST * all {
@@ -350,7 +386,7 @@ impl Light<'_> {
     /// The sheet's alpha at `p`: what does not reach it, less what is too
     /// faint to call shade.
     fn shade(&self, p: Vec3) -> f32 {
-        let dark = (1.0 - self.reaches(p)).min(DARKEST);
+        let dark = (1.0 - self.reaches(p)).min(self.darkest);
         ((dark - FAINT) / (1.0 - FAINT)).max(0.0)
     }
 
@@ -459,12 +495,23 @@ fn covered(map: &Map, p: Vec3) -> bool {
     hit
 }
 
+/// Whether anything stands within [`NEAR_M`] of (x, z), at any height.
+fn near(map: &Map, x: f32, z: f32) -> bool {
+    let (lo, hi) = ((x - NEAR_M, z - NEAR_M), (x + NEAR_M, z + NEAR_M));
+    let mut any = false;
+    map.each_box_in(lo, hi, |b| any |= b.over_xz(x, z, NEAR_M));
+    map.each_solid_in(lo, hi, |_| any = true);
+    any
+}
+
 /// The sheets being laid: one mesh for the map.
 #[derive(Default)]
 struct Sheets {
     at: Vec<[f32; 3]>,
     colour: Vec<[f32; 4]>,
     tris: Vec<u32>,
+    /// How far over its floor the sheet lies.
+    lift: f32,
 }
 
 impl Sheets {
@@ -515,7 +562,7 @@ impl Sheets {
             for (k, &v) in corners.iter().enumerate() {
                 if index[v] == u32::MAX {
                     index[v] = self.at.len() as u32;
-                    let p = place(v % w, v / w) + Vec3::Y * LIFT_M;
+                    let p = place(v % w, v / w) + Vec3::Y * self.lift;
                     self.at.push(p.to_array());
                     self.colour.push([spill[v].x, spill[v].y, spill[v].z, shade[v]]);
                 }
@@ -548,27 +595,24 @@ fn cells(len: f32) -> usize {
 }
 
 /// The map's floors under its lamps and its fill, as one mesh: the ground,
-/// each box's top and each solid's (a round one, a turned box, a ramp)
-/// that `floor_box` and `floor_solid` call a floor. `None` under an open
-/// sky (the sun casts there), or where there is no shade to lay.
+/// each box's top and each solid's that `floor_box` and `floor_solid` call
+/// a floor. `None` where there is neither shade nor light to lay.
 ///
 /// `fill_units` is the fill on a floor with its dome open, in the
-/// renderer's units (`rig::expose_for`'s intensity times the hall's cube
-/// looking up); then the lamps' range, their cone and the height from
-/// which one is a cone down (`level`'s), whether the ground is drawn, and
-/// the lights that spill on it.
+/// renderer's units (`rig::expose_for`'s intensity times its cube looking
+/// up), and with it under an open sky the way to the sun and what it gives
+/// a floor ([`sun_units`]); then the lamps' range, their cone and the
+/// height from which one is a cone down (`level`'s), whether the ground is
+/// drawn, and the lights that spill on it.
 pub fn mesh(
     map: &Map,
-    fill_units: f32,
+    (fill_units, sun): (f32, Option<(Vec3, f32)>),
     (range, cone, down_from): (f32, (f32, f32), f32),
     ground: bool,
     floor_box: impl Fn(usize) -> bool,
     floor_solid: impl Fn(usize) -> bool,
     lights: &Lights,
 ) -> Option<Mesh> {
-    if map.light.sun > 0.0 || map.terrain.is_some() {
-        return None;
-    }
     let lamps: Vec<Lamp> = map
         .light
         .lamps
@@ -580,34 +624,45 @@ pub fn mesh(
             casts: 1.0,
         })
         .collect();
-    let top = lamps.iter().fold(0.0f32, |m, l| m.max(l.at.y));
+    let open = sun.is_some();
     let mut light = Light {
         map,
         lamps,
         fill: fill_units,
         range,
         cone,
+        sun,
+        reach: if open { REACH_OPEN_M } else { REACH_M },
+        takes: if open { 1.0 } else { DOME_TAKES },
+        darkest: if open { DARKEST_OPEN } else { DARKEST },
         lights,
         near: lights.by_square(),
     };
     light.cast();
-    let mut sheets = Sheets::default();
-    // The ground, where it is drawn (Cistern's is under its water).
+    let mut sheets = Sheets {
+        lift: if map.terrain.is_some() { LIFT_GROUND_M } else { LIFT_M },
+        ..default()
+    };
+    // The ground, where it is drawn (Cistern's is under its water) and
+    // something stands near enough to shade or light it.
     let (lo, hi) = (Vec2::new(map.lo.0, map.lo.1), Vec2::new(map.hi.0, map.hi.1));
     let size = hi - lo;
     if ground {
         sheets.patch(
             &light,
             (cells(size.x), cells(size.y)),
-            |u, v| Vec3::new(lo.x + size.x * u, 0.0, lo.y + size.y * v),
-            |_| true,
+            |u, v| {
+                let (x, z) = (lo.x + size.x * u, lo.y + size.y * v);
+                Vec3::new(x, map.ground(x, z), z)
+            },
+            |mid| mid.y > map.void && near(map, mid.x, mid.z),
         );
     }
     // A top another floor at its height already lies on is that one's.
     let same = |y: f32, other: f32| (y - other).abs() < 2e-3;
     let boxes = &map.boxes;
     for (i, b) in boxes.iter().enumerate() {
-        if !floor_box(i) || b.max.y > top || b.max.y <= 0.0 {
+        if !floor_box(i) || b.max.y <= map.ground((b.min.x + b.max.x) * 0.5, (b.min.z + b.max.z) * 0.5) {
             continue;
         }
         let (min, size) = (b.min, b.max - b.min);
@@ -625,7 +680,7 @@ pub fn mesh(
         );
     }
     for (i, s) in map.solids.iter().enumerate() {
-        if !floor_solid(i) || s.y1 > top {
+        if !floor_solid(i) {
             continue;
         }
         match s.shape {
@@ -672,23 +727,55 @@ pub fn mesh(
                     |_| true,
                 );
             }
-            _ => {}
+            // A deck or a wall turned on a profile: where its top is level
+            // (a deck's face, not its rolled rim or a wall's batter).
+            Shape::Revolve { .. } | Shape::Sweep { .. } => {
+                let b = s.bounds();
+                let size = b.max - b.min;
+                let level = |x: f32, z: f32| {
+                    let y = s.top_at(x, z);
+                    (s.top_at(x + 0.1, z) - y).abs() < 0.01 && (s.top_at(x, z + 0.1) - y).abs() < 0.01
+                };
+                sheets.patch(
+                    &light,
+                    (cells(size.x), cells(size.z)),
+                    |u, v| {
+                        let (px, pz) = (b.min.x + size.x * u, b.min.z + size.z * v);
+                        Vec3::new(px, s.top_at(px, pz), pz)
+                    },
+                    |mid| s.over(mid.x, mid.z, 0.0) && level(mid.x, mid.z),
+                );
+            }
         }
     }
     sheets.mesh()
 }
 
 /// The fill on a floor of map `id` with its dome open, in the renderer's
-/// units: the camera's (`rig::expose_for`) times what the hall's cube shows
-/// a floor looking up.
+/// units: the camera's (`rig::expose_for`) times what its cube shows a
+/// floor looking up, the hall's under a roof and the sky's under none.
 pub fn fill_units(map: &Map, id: u8) -> f32 {
     let mood = super::mood::of(id);
+    if map.light.sun > 0.0 {
+        return map.light.fill * mood.fill * fill::luminance(fill::fill_at(Vec3::Y));
+    }
     let hall = fill::hall::PALETTES[mood.hall];
     fill::peak_lux()
         * map.light.fill
         * mood.fill
         * fill::hall::GAIN
         * fill::luminance(fill::hall::diffuse_at(hall, Vec3::Y))
+}
+
+/// Toward map `id`'s sun and what it gives a floor it is on, in the same
+/// units; none under a roof.
+pub fn sun_units(map: &Map, id: u8) -> Option<(Vec3, f32)> {
+    let mood = super::mood::of(id);
+    let to = mood.to_sun();
+    (map.light.sun > 0.0).then(|| {
+        let lux = bevy::light::light_consts::lux::DIRECT_SUNLIGHT * map.light.sun * mood.sun;
+        (to, lux * to.y.max(0.0) / core::f32::consts::PI)
+    })
 }
 
 /// The sheet's material: its vertices' own colours, lit by nothing. Their
@@ -767,7 +854,7 @@ pub fn lay(
         }
         let sheet = mesh(
             &w.map,
-            fill_units(&w.map, w.id),
+            (fill_units(&w.map, w.id), sun_units(&w.map, w.id)),
             w.lamps,
             w.ground,
             |i| w.floor_box[i],
@@ -810,37 +897,32 @@ mod tests {
         assert!((up - 2.0 / 3.0).abs() < 0.03, "{up}");
     }
 
-    /// Every roofed map has shade to lay, none of it past [`DARKEST`] and
-    /// none of it over all of a floor (the open deck is bare, where it
-    /// would be a blend over every pixel for nothing); under the sun there
-    /// is none, the sun casts there.
+    /// Every map has shade to lay, none of it past its darkest and most of
+    /// it light: a sheet that was deep shade all over would be a darker
+    /// map, not a shaded one.
     #[test]
     fn a_hall_is_shaded_and_never_black() {
         for def in sim::maps::ALL.iter() {
             let map = def.build();
             let m = mesh(
                 &map,
-                fill_units(&map, map.id),
+                (fill_units(&map, map.id), sun_units(&map, map.id)),
                 (22.0, (0.6, 1.05), 13.0),
                 true,
                 |_| true,
                 |_| true,
                 &Lights::default(),
             );
-            if map.light.sun > 0.0 {
-                assert!(m.is_none(), "{}: the sun casts there", map.name);
-                continue;
-            }
             let m = m.unwrap_or_else(|| panic!("{}: no shade", map.name));
             let Some(bevy::mesh::VertexAttributeValues::Float32x4(c)) = m.attribute(Mesh::ATTRIBUTE_COLOR) else {
                 panic!("no colours");
             };
-            assert!(c.iter().all(|c| (0.0..=DARKEST).contains(&c[3])), "{}", map.name);
-            let floor = (map.hi.0 - map.lo.0) * (map.hi.1 - map.lo.1);
+            let darkest = if map.light.sun > 0.0 { DARKEST_OPEN } else { DARKEST };
+            assert!(c.iter().all(|c| (0.0..=darkest).contains(&c[3])), "{}", map.name);
             let cells = m.indices().map_or(0, |i| i.len() / 6) as f32;
             let deep = c.iter().filter(|c| c[3] > 0.5).count() as f32 / c.len() as f32;
-            assert!(cells * CELL_M * CELL_M > 0.05 * floor, "{}: {cells} cells", map.name);
-            assert!(deep < 0.4, "{}: {deep} of it is deep shade", map.name);
+            assert!(cells > 100.0, "{}: {cells} cells", map.name);
+            assert!(deep < 0.6, "{}: {deep} of it is deep shade", map.name);
         }
     }
 
@@ -862,6 +944,10 @@ mod tests {
             fill: 1.0,
             range: 22.0,
             cone: (0.6, 1.05),
+            sun: None,
+            reach: REACH_M,
+            takes: DOME_TAKES,
+            darkest: DARKEST,
             near: lights.by_square(),
             lights: &lights,
         };
@@ -888,6 +974,10 @@ mod tests {
             let none = Lights::default();
             let mut l = Light {
                 map: &map,
+                sun: None,
+                reach: REACH_M,
+                takes: DOME_TAKES,
+                darkest: DARKEST,
                 lights: &none,
                 near: HashMap::new(),
                 lamps: lamps

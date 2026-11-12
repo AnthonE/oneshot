@@ -145,6 +145,10 @@ pub struct Set {
     pub turns: (Vec3, f32),
     /// Its lifts' look, if not the game's own.
     pub lift: Option<Lift>,
+    /// Where the map's own floor is not drawn (`hidden`), whether the set
+    /// draws a ground that is stood on (Overpass's road: yes; Cistern's is
+    /// under its water).
+    pub ground: bool,
 }
 
 const BRONZE_PAINT: Paint = Paint::Metal(BRONZE, BRONZE_ROUGH, BRONZE_METAL);
@@ -170,6 +174,7 @@ const OBSERVATORY: Set = Set {
     // `observatory.py`'s `CROWN_AT`.
     turns: (Vec3::new(0.0, 33.0, 21.0), 0.05),
     lift: None,
+    ground: false,
 };
 
 const CISTERN: Set = Set {
@@ -200,6 +205,7 @@ const CISTERN: Set = Set {
         glow: LinearRgba::rgb(0.5, 0.68, 0.9),
         beam: Color::srgba(0.5, 0.68, 0.95, 0.04),
     }),
+    ground: false,
 };
 
 const OVERPASS: Set = Set {
@@ -235,6 +241,7 @@ const OVERPASS: Set = Set {
     block: (Vec3::new(0.0, 4.0, 0.0), Vec3::new(40.0, 8.0, 40.0)),
     turns: (Vec3::ZERO, 0.0),
     lift: None,
+    ground: true,
 };
 
 const DOCK: Set = Set {
@@ -272,6 +279,7 @@ const DOCK: Set = Set {
     block: (Vec3::new(0.0, 5.0, 0.0), Vec3::new(25.0, 6.0, 17.0)),
     turns: (Vec3::ZERO, 0.0),
     lift: None,
+    ground: false,
 };
 
 const RANGE: Set = Set {
@@ -298,6 +306,7 @@ const RANGE: Set = Set {
     block: (Vec3::new(0.0, 4.0, 0.0), Vec3::new(25.0, 6.0, 25.0)),
     turns: (Vec3::ZERO, 0.0),
     lift: None,
+    ground: false,
 };
 
 /// Pithead's paint: what the Blender kit colours per vertex (`pithead.py`'s
@@ -356,6 +365,7 @@ const PITHEAD: Set = Set {
     block: (Vec3::new(0.0, 4.0, 0.0), Vec3::new(22.0, 8.0, 15.0)),
     turns: (Vec3::ZERO, 0.0),
     lift: None,
+    ground: false,
 };
 
 /// The built set of map `id`, if it has one.

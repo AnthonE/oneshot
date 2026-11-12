@@ -1785,10 +1785,10 @@ pub fn build(
     } else {
         mood.ev100
     };
-    // The shade a hall's lamps and fill lay on its floors, and the light
-    // its strips do (`look/floor_shade.rs`): laid once a built set's
-    // lights are in.
-    if map.light.sun <= 0.0 && map.terrain.is_none() {
+    // The shade a map's lamps and its fill (a hall's, or the sky's) lay on
+    // its floors, and the light its strips do (`look/floor_shade.rs`):
+    // laid once a built set's lights are in.
+    {
         let built = crate::look::built::of(id).is_some();
         // What is drawn as a floor: not a strip of light, not a box nothing
         // draws, not a prop standing in its solid.
@@ -1807,7 +1807,9 @@ pub fn build(
         commands.spawn((
             LevelPart,
             crate::look::floor_shade::Waits {
-                ground: map.light.floor != HIDDEN,
+                // A floor the level draws, or a set that draws its own
+                // (Overpass's road; Cistern's is its water).
+                ground: map.light.floor != HIDDEN || crate::look::built::of(id).is_some_and(|s| s.ground),
                 map: Box::new(map.clone()),
                 id,
                 lamps: (LAMP_RANGE, LAMP_CONE, LAMP_DOWN_FROM),
