@@ -726,6 +726,11 @@ fn look(i: u8) -> (Color, f32, f32) {
 /// edge, so it wanders with its noise instead of stepping per vertex. The
 /// rock skin grows on the same weight (`look/cliffs.rs`).
 const ROCK_SLOPE: (f32, f32) = (0.45, 0.9);
+/// The same under a valley's snow (`Land::Alpine`): snow lies on steeper
+/// ground than sand does, to about 39°, and the per-pixel veto takes over
+/// from 46° (`look::ground::SNOW_CLIFF_TAN`). At the canyon's band every
+/// mountainside between was a mottle of both.
+const SNOW_ROCK_SLOPE: (f32, f32) = (0.8, 1.05);
 /// A creek bed is gravel: ground under the floor (below `CREEK_Y`, fully
 /// half a metre lower) that also lies in a trough, under both of its
 /// neighbours `CREEK_STENCIL_M` off along an axis by `CREEK_BASIN`'s first
@@ -742,18 +747,24 @@ const CREEK_BASIN: (f32, f32) = (0.6, 1.2);
 /// hills in patches, sand the rest.
 /// What kind of land a terrain is, for what grows on it and what lies
 /// round it: a canyon (Dry Fork: grass up its hills, gravel in its creek,
-/// land beyond its rim, a sea at its mouth), or an island over a void (a map
-/// with a `void`: bare sandstone and its rock, cloud all round and under).
+/// land beyond its rim, a sea at its mouth), an island over a void (a map
+/// with a `void`: bare sandstone and its rock, cloud all round and under),
+/// or a valley under snow (Icefall: a terrain with no void whose mood
+/// snows: drifts where the ground lies, cold rock where it stands, nothing
+/// growing, mountains beyond its rim).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Land {
     Canyon,
     Isle,
+    Alpine,
 }
 
 impl Land {
     pub fn of(def: &sim::map::Def) -> Land {
         if def.void > f32::NEG_INFINITY {
             Land::Isle
+        } else if crate::look::mood::of(def.id).snow {
+            Land::Alpine
         } else {
             Land::Canyon
         }
@@ -789,6 +800,10 @@ pub(crate) fn ground_point(t: &TerrainDef, i: usize, j: usize, land: Land) -> (f
         };
         return (slope, splat_in(slope, y, 0.0, 0.0));
     }
+    if land == Land::Alpine {
+        // Under snow: drifts where it lies, rock where it stands.
+        return (slope, splat_snow(slope));
+    }
     let cover = crate::look::grass::cover(t.x0 + i as f32 * t.cell, t.z0 + j as f32 * t.cell, y);
     (slope, splat_in(slope, y, trough, cover))
 }
@@ -801,6 +816,9 @@ pub(crate) fn splat_at(map: &sim::map::Map, x: f32, z: f32) -> [f32; 4] {
     let slope = (n.x * n.x + n.z * n.z).sqrt() / n.y.max(0.01);
     if map.void > f32::NEG_INFINITY {
         return splat_in(slope, y, 0.0, 0.0);
+    }
+    if crate::look::mood::of(map.id).snow {
+        return splat_snow(slope);
     }
     let s = CREEK_STENCIL_M;
     let along_x = map.ground(x + s, z).min(map.ground(x - s, z)) - y;
@@ -821,6 +839,13 @@ pub(crate) fn splat(slope: f32, y: f32) -> [f32; 4] {
 /// lies, rock where it stands, nothing else.
 pub(crate) fn splat_bare(slope: f32, y: f32) -> [f32; 4] {
     splat_in(slope, y, 0.0, 0.0)
+}
+
+/// The same under a valley's snow (`Land::Alpine`): snow (the sand's lane)
+/// where it lies, rock where it stands ([`SNOW_ROCK_SLOPE`]).
+pub(crate) fn splat_snow(slope: f32) -> [f32; 4] {
+    let rock = ((slope - SNOW_ROCK_SLOPE.0) / (SNOW_ROCK_SLOPE.1 - SNOW_ROCK_SLOPE.0)).clamp(0.0, 1.0);
+    [1.0 - rock, 0.0, 0.0, rock]
 }
 
 /// The weights, given how much of a trough the spot lies in (0..1) and how
@@ -1075,7 +1100,9 @@ pub fn build(
                 min,
                 max,
                 key: box_key(mid, id),
-                pale: land == Land::Isle,
+                // An island's sandstone and a snowed valley's cold stone: never the canyon's red.
+                pale: land != Land::Canyon,
+                cold: land == Land::Alpine,
             });
         }
     }
@@ -1084,8 +1111,9 @@ pub fn build(
     crate::look::built::spawn(commands, id);
     // And trees along the rim over the walls, out of reach too, and the
     // land beyond it (`look/far.rs`).
-    // An island has none: the cloud is its distance.
-    if let Some(t) = def.terrain.as_ref().filter(|_| land == Land::Canyon) {
+    // An island has none: the cloud is its distance. A valley under snow
+    // has the land (more mountains, white) and no trees up on its rim.
+    if let Some(t) = def.terrain.as_ref().filter(|_| land != Land::Isle) {
         crate::look::far::spawn(
             commands,
             meshes,
@@ -1095,9 +1123,15 @@ pub fn build(
             hi.0,
             def.light.sea,
             id as u32,
+            land == Land::Alpine,
         );
         let ground = |x: f32, z: f32| crate::look::grass::ground(t, x, z);
-        for (foot, height, kind, seed) in crate::look::trees::rim(ground, lo, hi, id as u32) {
+        let rim = if land == Land::Canyon {
+            crate::look::trees::rim(ground, lo, hi, id as u32)
+        } else {
+            Vec::new()
+        };
+        for (foot, height, kind, seed) in rim {
             let cards = cards.get(images);
             for (mesh, mat, at) in
                 crate::look::trees::tree(kind, seed, crate::look::trees::RIM_TRUNK_R, height, cards, meshes, mats)
@@ -1244,9 +1278,12 @@ pub fn build(
             let sim::solid::Shape::Round { x, z, r } = sol.shape else {
                 continue;
             };
-            // Most of the canyon's trees are in leaf (`trees::in_leaf`).
+            // Most of the canyon's trees are in leaf (`trees::in_leaf`);
+            // under snow a snag is bare.
             let kind = match kind {
-                crate::look::trees::Kind::Dead if crate::look::trees::in_leaf(x, z) => crate::look::trees::Kind::Live,
+                crate::look::trees::Kind::Dead if land != Land::Alpine && crate::look::trees::in_leaf(x, z) => {
+                    crate::look::trees::Kind::Live
+                }
                 k => k,
             };
             // Each tree its own, from where it stands (a mirrored twin differs).
@@ -1508,15 +1545,18 @@ pub fn build(
             // vehicles' bays and the walls (`look/grass.rs`,
             // `look/clutter.rs`). Neither casts a shadow (a rung without
             // them would light a fighter's feet they shade). An island's
-            // bare sandstone grows dry tufts and sheds its own chips; one
-            // under snow, neither.
+            // bare sandstone grows dry tufts and sheds its own chips; land
+            // under snow, an island's or a valley's, neither.
             let seed = id as u32 * 7919 + 1;
             let clear = crate::look::grass::Clear::pads(&map);
             let isle = land == Land::Isle;
-            let snowed = isle && crate::look::mood::of(id).snow;
-            let grows = |v: Vec<_>| if snowed { Vec::new() } else { v };
-            for (mesh, centre, layer) in grows(crate::look::grass::blocks(t, lo, hi, seed, &clear, def.light.sea, isle))
-            {
+            let snowed = crate::look::mood::of(id).snow;
+            let cover = if snowed {
+                Vec::new()
+            } else {
+                crate::look::grass::blocks(t, lo, hi, seed, &clear, def.light.sea, isle)
+            };
+            for (mesh, centre, layer) in cover {
                 commands.spawn((
                     LevelPart,
                     GrassPart,
@@ -1532,14 +1572,12 @@ pub fn build(
                 ));
             }
             let clear = crate::look::clutter::clear(&map, t);
-            for (mesh, centre, layer) in grows(crate::look::clutter::blocks(
-                t,
-                lo,
-                hi,
-                seed ^ 0xc1a7_7e75,
-                &clear,
-                isle,
-            )) {
+            let litter = if snowed {
+                Vec::new()
+            } else {
+                crate::look::clutter::blocks(t, lo, hi, seed ^ 0xc1a7_7e75, &clear, isle)
+            };
+            for (mesh, centre, layer) in litter {
                 commands.spawn((
                     LevelPart,
                     ClutterPart,

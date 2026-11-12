@@ -467,6 +467,53 @@ pub const BLIZZARD: Mood = Mood {
     snow: true,
 };
 
+/// Icefall: a valley in the mountains on a cold clear morning after snow.
+/// The sun 43° up in the south, across the line between the bases and a
+/// little toward blue's end, so the south wall throws its shade over the
+/// moraine and the snow shed while the lake and the north wall stand in
+/// the light, and red's facade is lit where blue's is in shade: the two
+/// lanes and the two ends each their own. Broken cloud whose shadows cross
+/// the snow, a few flakes still coming down, and a mist that takes half of
+/// what is 300 m off, so the far end of a lane pales into the air and a
+/// rifle doesn't own the valley from one end. The exposure is closed a
+/// step for the snow; the cold is in the grade.
+pub const FROST: Mood = Mood {
+    name: "frost",
+    sun_elev: 0.75,
+    sun_azim: 2.79,
+    sun_rgb: [1.0, 0.96, 0.9],
+    sun: 1.0,
+    light: 1.0,
+    fill: 0.9,
+    ev100: 14.7,
+    cover: 0.42,
+    dark: 0.1,
+    mist: 0.0022,
+    rain: 0.12,
+    dust: 0.0,
+    wet: 0.0,
+    wind_azim: 1.9,
+    wind_ms: 5.0,
+    stars: 0.0,
+    moon: 0.0,
+    moon_elev: -0.5,
+    moon_azim: 0.0,
+    moon_lit: 1.0,
+    shade: 0.35,
+    deep: 0.1,
+    veil: 0.12,
+    field_at: [41.0, 13.0],
+    hall: 0,
+    grade: Grade {
+        temperature: -0.03,
+        tint: 0.004,
+        saturation: 0.96,
+        contrast: 1.0,
+        lift: 0.0,
+    },
+    snow: true,
+};
+
 /// Chrysalis: inside the hull, under its roof and its lamps. The map's own
 /// light (`LightDef`: its exposure, no sun, the fill all but closed) is
 /// what draws it; the sky above the roof is never seen.
@@ -518,6 +565,7 @@ pub fn of(id: u8) -> Mood {
         6 => INTERIOR,
         7 => OVERCAST,
         8 => BLIZZARD,
+        9 => FROST,
         _ => NOON,
     }
 }
@@ -732,7 +780,7 @@ mod tests {
     /// the cloud shadows never taking more than half the sun.
     #[test]
     fn every_mood_keeps_a_fighter_readable() {
-        for id in 0..=8u8 {
+        for id in 0..=9u8 {
             let m = of(id);
             assert!(m.sun_elev > 0.15, "{}: the sun is up", m.name);
             assert!(m.sun >= 0.5 && m.fill >= 0.7, "{}: lit", m.name);
@@ -769,7 +817,7 @@ mod tests {
                 [0.0, 0.0, 1.0]
             }
         };
-        for id in 0..=8u8 {
+        for id in 0..=9u8 {
             let m = of(id);
             let mut c = ColorGrading::default();
             super::super::rig::grade(m.grade, &mut c);

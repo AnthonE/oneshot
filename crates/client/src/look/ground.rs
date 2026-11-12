@@ -159,6 +159,9 @@ pub const TINT: [Vec4; 4] = [
 /// one starts where Dry Fork's compiled wall leaves its scree.
 pub const CLIFF_TAN_LO: f32 = 0.9;
 pub const CLIFF_TAN_HI: f32 = 1.25;
+/// The same under a valley's snow (`level::Land::Alpine`, over its
+/// `SNOW_ROCK_SLOPE`): snow holds to 46° and is gone by 56°.
+pub const SNOW_CLIFF_TAN: (f32, f32) = (1.05, 1.5);
 /// How far the noise moves that threshold, in rise over run, peak to peak:
 /// half of it reaches below `CLIFF_TAN_LO`, so a slope of 0.7 is as low as
 /// the edge wanders.
@@ -311,7 +314,8 @@ impl MaterialExtension for Ground {
 /// The ground's material over its photographs, wet up from the sea at
 /// `sea_y` (the map's `light.sea`; not finite means no sea); `lite` is the
 /// lowest rung, which draws no wall planes or rock face; `isle` an island's
-/// ground, in its own tints, and `snow` one under snow (its mood snows):
+/// ground, in its own tints, and `snow` ground under snow (its mood snows;
+/// an island's or a valley's):
 /// drifts where the sand would lie and cold fractured rock where it stands;
 /// `cloud` the deck's shadows and the rain's wet as the map's mood has them.
 pub fn material(
@@ -324,13 +328,18 @@ pub fn material(
     cloud: super::cloud_shadow::CloudShadowParams,
 ) -> GroundMaterial {
     let mut params = GroundParams::default();
-    if isle && snow {
-        // A canyon's split blocks and cracks, not the sandstone's rounding.
+    if snow {
+        // An island's or a valley's (`level::Land::Alpine`). A canyon's
+        // split blocks and cracks, not the sandstone's rounding.
         params.tint = ICE_TINT;
         params.layers.x = super::textures::ICE_ROCK_LAYER;
         params.layers.y = super::textures::DRIFT_LAYER;
         params.tile_m.x = super::textures::DRIFT_TILE_M;
         params.tile_m.w = super::textures::ICE_ROCK_TILE_M;
+        if !isle {
+            params.cliff.x = SNOW_CLIFF_TAN.0;
+            params.cliff.y = SNOW_CLIFF_TAN.1;
+        }
     } else if isle {
         params.tint = ISLE_TINT;
         params.layers.x = super::textures::ISLE_ROCK_LAYER;

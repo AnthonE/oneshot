@@ -83,6 +83,14 @@ VIEWS=(
   "pit_collar|map=8&eye=-6.5,0.7,2.5&look=4,5,-2|2"
   "pit_sheave|map=8&eye=-1,12.1,-2.4&look=-17,5,8|2"
   "pit_shaft|map=8&eye=-9,0.7,2.5&look=4,-14,-12|2"
+  "ice_base|map=9&eye=-168,4.5,22&look=-206,9,0|2"
+  "ice_hangar|map=9&eye=-211,6.7,5&look=-238,6.5,-2|2"
+  "ice_terrace|map=9&eye=-236,14.2,-22&look=-150,4,30|2"
+  "ice_lake|map=9&eye=-158,2.4,56&look=0,6,96|2"
+  "ice_col|map=9&eye=-10,11.3,-6&look=-84,22,0|2"
+  "ice_perch|map=9&eye=-76,27.6,0&look=-210,6,0|2"
+  "ice_moraine|map=9&eye=-150,2.6,-58&look=-20,6,-112|2"
+  "ice_over|map=9&eye=0,70,-120&look=0,0,40|2"
 )
 
 if [ "${1:-}" = list ]; then

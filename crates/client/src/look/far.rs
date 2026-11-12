@@ -58,6 +58,13 @@ const ROCK: [f32; 3] = [0.30, 0.15, 0.08];
 const ROCK_PALE: [f32; 3] = [0.40, 0.26, 0.16];
 const SCRUB: [f32; 3] = [0.17, 0.19, 0.08];
 const AIR: [f32; 3] = [0.50, 0.62, 0.80];
+/// Under snow (a valley whose mood snows, `level::Land::Alpine`): the cold
+/// rock of its faces and a paler bed in it, snow on what lies flat, and a
+/// paler air to go into.
+const SNOW_ROCK: [f32; 3] = [0.10, 0.11, 0.14];
+const SNOW_ROCK_PALE: [f32; 3] = [0.20, 0.22, 0.27];
+const SNOW: [f32; 3] = [0.80, 0.85, 0.93];
+const SNOW_AIR: [f32; 3] = [0.70, 0.78, 0.90];
 const HAZE: f32 = 0.62;
 const HAZE_M: f32 = 1500.0;
 
@@ -99,8 +106,13 @@ pub fn height(x: f32, z: f32, out: f32, sea_x: f32, sea: f32, seed: u32) -> f32 
 }
 
 /// The mesh round a terrain whose rectangle is `lo..hi` (its own edge, past
-/// the playable bound).
-pub fn mesh(lo: Vec2, hi: Vec2, sea_x: f32, sea: f32, seed: u32) -> Mesh {
+/// the playable bound); `snow`: under snow, in its colours.
+pub fn mesh(lo: Vec2, hi: Vec2, sea_x: f32, sea: f32, seed: u32, snow: bool) -> Mesh {
+    let (rock_c, pale_c, flat_c, air_c) = if snow {
+        (SNOW_ROCK, SNOW_ROCK_PALE, SNOW, SNOW_AIR)
+    } else {
+        (ROCK, ROCK_PALE, SCRUB, AIR)
+    };
     let mid = (lo + hi) * 0.5;
     let half = (hi - lo) * 0.5;
     let rings = RINGS_M.len();
@@ -139,10 +151,10 @@ pub fn mesh(lo: Vec2, hi: Vec2, sea_x: f32, sea: f32, seed: u32) -> Mesh {
             let bed = smooth(0.55, 0.9, noise(p.y / 60.0, (p.x + p.z) / 900.0, 0x0bed));
             let mut c = [0.0f32; 3];
             for k in 0..3 {
-                let rock = ROCK[k] + (ROCK_PALE[k] - ROCK[k]) * bed;
-                let ground = rock + (SCRUB[k] - rock) * flat;
+                let rock = rock_c[k] + (pale_c[k] - rock_c[k]) * bed;
+                let ground = rock + (flat_c[k] - rock) * flat;
                 let haze = HAZE * smooth(0.0, HAZE_M, outs[i]);
-                c[k] = ground + (AIR[k] - ground) * haze;
+                c[k] = ground + (air_c[k] - ground) * haze;
             }
             [c[0], c[1], c[2], 1.0]
         })
@@ -184,10 +196,11 @@ pub fn spawn(
     sea_x: f32,
     sea: f32,
     seed: u32,
+    snow: bool,
 ) {
     commands.spawn((
         LevelPart,
-        Mesh3d(meshes.add(mesh(lo, hi, sea_x, sea, seed))),
+        Mesh3d(meshes.add(mesh(lo, hi, sea_x, sea, seed, snow))),
         MeshMaterial3d(mats.add(StandardMaterial {
             base_color: Color::WHITE,
             perceptual_roughness: 1.0,
@@ -226,7 +239,14 @@ mod tests {
 
     #[test]
     fn the_mesh_rings_the_terrain() {
-        let m = mesh(Vec2::new(-200.0, -108.0), Vec2::new(210.0, 108.0), 150.0, -6.0, 3);
+        let m = mesh(
+            Vec2::new(-200.0, -108.0),
+            Vec2::new(210.0, 108.0),
+            150.0,
+            -6.0,
+            3,
+            false,
+        );
         let Some(bevy::mesh::VertexAttributeValues::Float32x3(p)) = m.attribute(Mesh::ATTRIBUTE_POSITION) else {
             panic!("no positions");
         };

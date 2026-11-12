@@ -1272,6 +1272,94 @@
           "private": true
         }
       ]
+    },
+    {
+      "id": "hd-ice_base",
+      "name": "Icefall: red's base from its forecourt",
+      "what": "the facade in the mountain's foot from the forecourt, the terrace over it and the cliff over that",
+      "take": "a base built into a mountain: a concrete front with three doors under a wall of rock and snow, the side's colour round its hangar door, snow drifted against it",
+      "shoot": [
+        "tools/hd.sh"
+      ],
+      "png": "traces/hd/ice_base.png",
+      "refs": []
+    },
+    {
+      "id": "hd-ice_hangar",
+      "name": "Icefall: in red's hangar",
+      "what": "the hangar from inside its main door, toward the flag's dais at the back",
+      "take": "a hall cut into rock: lamps, a floor that has been driven on, the flag's dais and what stands round it",
+      "shoot": [
+        "tools/hd.sh"
+      ],
+      "png": "traces/hd/ice_hangar.png",
+      "refs": []
+    },
+    {
+      "id": "hd-ice_terrace",
+      "name": "Icefall: off red's terrace",
+      "what": "from the terrace on the base's roof, over its parapet and the forecourt to the lake",
+      "take": "a height to defend from: the parapet near, the forecourt and its spurs below, the lake going off into the air",
+      "shoot": [
+        "tools/hd.sh"
+      ],
+      "png": "traces/hd/ice_terrace.png",
+      "refs": []
+    },
+    {
+      "id": "hd-ice_lake",
+      "name": "Icefall: the lake from red's north gate",
+      "what": "the frozen lake from its west end: the islets, the skerry, the north wall over it",
+      "take": "ice a truck would cross flat out: snow blown over it, islets of rock, pressure ridges, a wall of mountain beyond",
+      "shoot": [
+        "tools/hd.sh"
+      ],
+      "png": "traces/hd/ice_lake.png",
+      "refs": []
+    },
+    {
+      "id": "hd-ice_col",
+      "name": "Icefall: red's massif from the col",
+      "what": "the massif from the station on the col: its sheer flank, the perch on its crest",
+      "take": "a rock that parts the lanes: faces nobody climbs, snow on its top, the way up its spine",
+      "shoot": [
+        "tools/hd.sh"
+      ],
+      "png": "traces/hd/ice_col.png",
+      "refs": []
+    },
+    {
+      "id": "hd-ice_perch",
+      "name": "Icefall: red's base from its perch",
+      "what": "from the perch on red's massif back to its base: the forecourt, the facade, the mountain it is built in",
+      "take": "how small the base is under its mountain, and everything between laid out",
+      "shoot": [
+        "tools/hd.sh"
+      ],
+      "png": "traces/hd/ice_perch.png",
+      "refs": []
+    },
+    {
+      "id": "hd-ice_moraine",
+      "name": "Icefall: the moraine from red's south gate",
+      "what": "the south lane from its west end: drumlins, boulders, snags, the snow shed along the wall",
+      "take": "broken ground to fight across: rises to drive round, rock to stand behind, bare trees, the wall's shade over it",
+      "shoot": [
+        "tools/hd.sh"
+      ],
+      "png": "traces/hd/ice_moraine.png",
+      "refs": []
+    },
+    {
+      "id": "hd-ice_over",
+      "name": "Icefall: from the air",
+      "what": "the middle from over the south wall: both massifs, the col's station, the lake beyond",
+      "take": "the valley read at a glance: three lanes, two massifs, the col between",
+      "shoot": [
+        "tools/hd.sh"
+      ],
+      "png": "traces/hd/ice_over.png",
+      "refs": []
     }
   ]
 }

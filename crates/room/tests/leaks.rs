@@ -596,7 +596,10 @@ fn nothing_a_client_should_not_know_reaches_it_in_doubles() {
 
 #[test]
 fn nothing_a_client_should_not_know_reaches_it_on_any_map() {
-    for d in sim::maps::ALL {
+    // A map kept to Big Team (Icefall) is not gated at four seats or eight:
+    // across it they meet too seldom in two minutes for the gate to mean
+    // anything. Big Team's gates below play it with sixteen.
+    for d in sim::maps::ALL.iter().filter(|d| d.modes != sim::map::ROT_BIG_TEAM) {
         for rules in [Rules::doubles(), Rules::ffa()] {
             gate(
                 d.build(),

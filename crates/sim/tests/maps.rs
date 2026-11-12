@@ -294,7 +294,14 @@ fn every_rotation_has_a_map() {
 #[test]
 fn bots_fight_on_every_map() {
     for d in ALL {
-        for rules in [Rules::doubles(), Rules::ffa()] {
+        // A map kept to Big Team (Icefall: too far across for four to meet
+        // in the time) is fought on by Big Team's sixteen.
+        let played = if d.modes == sim::map::ROT_BIG_TEAM {
+            vec![Rules::big_team()]
+        } else {
+            vec![Rules::doubles(), Rules::ffa()]
+        };
+        for rules in played {
             let rules = Rules {
                 score_limit: 1000,
                 time_limit_ms: 0,
@@ -332,27 +339,180 @@ fn bots_fight_on_every_map() {
     }
 }
 
-/// Big Team's sixteen seated at once on Dry Fork: nobody on top of anyone,
-/// and each side spread over its spawns, never one heap at its base.
+/// Big Team's sixteen seated at once on its maps (Dry Fork, Icefall):
+/// nobody on top of anyone, and each side spread over its spawns, never one
+/// heap at its base.
 #[test]
 fn a_full_big_team_spreads_over_its_spawns() {
-    let mut w = World::new(by_id(3).unwrap(), Rules::big_team(), 1, (2, 3));
-    for s in 0..MAX_FIGHTERS {
-        w.seat(s, (s & 1) as u8);
-    }
-    for a in 0..MAX_FIGHTERS {
-        for b in a + 1..MAX_FIGHTERS {
-            let d = (w.fighters[a].body.pos - w.fighters[b].body.pos).len();
-            assert!(d > 2.0, "{a} and {b} spawned {d} m apart");
+    for id in [3, 9] {
+        let mut w = World::new(by_id(id).unwrap(), Rules::big_team(), 1, (2, 3));
+        for s in 0..MAX_FIGHTERS {
+            w.seat(s, (s & 1) as u8);
         }
-        let crowd = (0..MAX_FIGHTERS)
-            .filter(|&b| b != a && w.fighters[b].team == w.fighters[a].team)
-            .filter(|&b| (w.fighters[a].body.pos - w.fighters[b].body.pos).len() < SPAWN_CROWD_R)
-            .count();
+        for a in 0..MAX_FIGHTERS {
+            for b in a + 1..MAX_FIGHTERS {
+                let d = (w.fighters[a].body.pos - w.fighters[b].body.pos).len();
+                assert!(d > 2.0, "map {id}: {a} and {b} spawned {d} m apart");
+            }
+            let crowd = (0..MAX_FIGHTERS)
+                .filter(|&b| b != a && w.fighters[b].team == w.fighters[a].team)
+                .filter(|&b| (w.fighters[a].body.pos - w.fighters[b].body.pos).len() < SPAWN_CROWD_R)
+                .count();
+            assert!(
+                crowd <= 2,
+                "map {id}: {a} spawned with {crowd} teammates within {SPAWN_CROWD_R} m"
+            );
+        }
+    }
+}
+
+/// Icefall's launchers throw where they are meant to, each side's alike:
+/// the long throw from the main door onto the massif's perch, the north
+/// door's to the lake's shore, the south door's to the first drumlin, and
+/// the lift up through the parapet's gap onto the terrace. A throw that
+/// clips the facade or a spur on the way lands somewhere else.
+#[test]
+fn icefalls_launchers_land_on_their_marks() {
+    use sim::geom::V3;
+    use sim::movement::{step, Body};
+    let m = by_id(9).unwrap();
+    // Red's marks (x, z, feet); blue's are their mirror images.
+    let marks: [(f32, f32, f32); 4] = [
+        (-84.0, 0.0, 25.9),
+        (-106.0, 48.0, -1.6),
+        (-118.0, -72.0, 0.3),
+        (-211.0, 23.0, 12.5),
+    ];
+    assert_eq!(m.launchers.len(), 8);
+    for (n, l) in m.launchers.iter().enumerate() {
+        let mid = (l.area.min + l.area.max) * 0.5;
+        let mut b = Body {
+            pos: V3::new(mid.x, m.floor(mid.x, mid.z, BODY_R, l.area.max.y), mid.z),
+            vel: V3::new(0.0, 0.0, 0.0),
+            grounded: true,
+            crouched: false,
+            duck: 0,
+        };
+        step(&mut b, &Input::default(), &m);
+        assert!(!b.grounded, "launcher {n} throws nobody");
+        let mut t = 0;
+        while !b.grounded && t < TICK_HZ * 8 {
+            step(&mut b, &Input::default(), &m);
+            t += 1;
+        }
+        let (x, z, y) = marks[n / 2];
+        let x = if n % 2 == 1 { -x } else { x };
+        let off = fabs(b.pos.x - x) + fabs(b.pos.z - z);
         assert!(
-            crowd <= 2,
-            "{a} spawned with {crowd} teammates within {SPAWN_CROWD_R} m"
+            off < 4.0 && fabs(b.pos.y - y) < 1.5,
+            "launcher {n} lands at {:?}, {off} m off its mark ({x}, {z}, {y})",
+            b.pos
         );
+    }
+}
+
+/// Icefall's ring is a road: a truck leaves red's hangar by its main door,
+/// goes out by the north gate, along the lake's shore, over the col, back
+/// along the moraine and through the snow shed, and home by the south gate,
+/// never stopped by a door, a rock or a bank. And a lap takes about as long
+/// as the route is at its speed: nothing on it is a crawl.
+#[test]
+fn a_truck_drives_icefalls_ring() {
+    let m = by_id(9).unwrap();
+    let d = m.vehicles[0];
+    let mut v = sim::vehicle::Vehicle {
+        active: true,
+        pos: d.pos,
+        yaw: d.yaw,
+        grounded: true,
+        health: VEH_HEALTH,
+        ..Default::default()
+    };
+    let way: [(f32, f32); 18] = [
+        (-200.0, 0.0),
+        (-176.0, 6.0),
+        (-158.0, 52.0),
+        (-112.0, 48.0),
+        (-60.0, 52.0),
+        (-28.0, 54.0),
+        (-8.0, 44.0),
+        (-12.0, 16.0),
+        (-12.0, -16.0),
+        (-6.0, -46.0),
+        (40.0, -100.0),
+        (30.0, -121.0),
+        (-30.0, -121.0),
+        (-60.0, -116.0),
+        (-110.0, -100.0),
+        (-158.0, -52.0),
+        (-176.0, -6.0),
+        (-200.0, 0.0),
+    ];
+    let mut ticks = 0u32;
+    let mut length = 0.0;
+    let mut from = (v.pos.x, v.pos.z);
+    for (k, &(x, z)) in way.iter().enumerate() {
+        length += ((x - from.0) * (x - from.0) + (z - from.1) * (z - from.1)).sqrt();
+        from = (x, z);
+        let mut t = 0;
+        loop {
+            let (dx, dz) = (x - v.pos.x, z - v.pos.z);
+            if dx * dx + dz * dz < 36.0 {
+                break;
+            }
+            let (f, _) = v.axes();
+            // Which way the mark lies off the nose, and how far round.
+            let cross = f.x * dz - f.z * dx;
+            let dot = f.x * dx + f.z * dz;
+            let far = (dx * dx + dz * dz).sqrt();
+            let steer = (cross / far * 3.0).clamp(-1.0, 1.0);
+            let inp = Input {
+                mx: (steer * 127.0) as i8,
+                // Slower into a mark behind it or hard round.
+                mz: if dot < 0.0 || fabs(steer) > 0.9 { 50 } else { 127 },
+                ..Input::default()
+            };
+            v.step_local(&inp, &m);
+            t += 1;
+            assert!(
+                t < TICK_HZ * 25,
+                "stuck on the way to mark {k} ({x}, {z}) at {:?}",
+                v.pos
+            );
+        }
+        ticks += t;
+    }
+    let secs = ticks as f32 / TICK_HZ as f32;
+    assert!(secs < length / VEH_TOP * 1.6, "a lap of {length} m took {secs} s");
+}
+
+/// Icefall's mountains are what hold a flier in, never its bounds: all
+/// along them the ground stands over the highest a flier climbs (its
+/// ceiling over the terrace it starts from).
+#[test]
+fn icefalls_rim_stands_over_a_fliers_ceiling() {
+    let m = by_id(9).unwrap();
+    let pad = m
+        .vehicles
+        .iter()
+        .filter(|v| v.kind == sim::vehicle::FLIER)
+        .map(|v| v.pos.y)
+        .fold(f32::NEG_INFINITY, f32::max);
+    assert!(pad.is_finite(), "Icefall has fliers");
+    let ceil = pad + FLY_CEIL + FLY_H;
+    let mut x = m.lo.0;
+    while x <= m.hi.0 {
+        for z in [m.lo.1, m.hi.1] {
+            assert!(m.ground(x, z) > ceil, "the rim at ({x}, {z}) is {} m", m.ground(x, z));
+        }
+        x += 2.0;
+    }
+    let mut z = m.lo.1;
+    while z <= m.hi.1 {
+        for x in [m.lo.0, m.hi.0] {
+            assert!(m.ground(x, z) > ceil, "the rim at ({x}, {z}) is {} m", m.ground(x, z));
+        }
+        z += 2.0;
     }
 }
 
