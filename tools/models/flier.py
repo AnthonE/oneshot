@@ -82,26 +82,27 @@ CREST = (0.055, 1.52)
 LOUVRES = (1.42, 1.53, 1.64)
 # A wing, root to tip: its leading and trailing edges (x at each span), the
 # height of its middle and its thickness. One long blade, a narrow triangle
-# held down and back: its leading edge swept, its trailing edge straight,
-# drooping from the body's shoulder to a point a hand over where its belly
+# held down and back, twice as long as it is wide at its root: both its edges
+# swept, a ridge down its back ahead of its spar (broad and flat it was a
+# delta: a hairline edge on and one pale sheet face on), drooping from the body's shoulder to a point a hand over where its belly
 # rides. (It was a sickle with seven feathers stepped down its trailing
 # edge: a bird's wing, and from astern fourteen paddles.) It is in the sim's
 # wing slab to the lance, and hangs under it from there out.
 W_LE = curve((0.5, 0.6), (0.9, 0.52), (1.9, -0.22), (2.54, -0.86))
-W_TE = curve((0.5, -0.86), (0.9, -0.9), (1.9, -1.04), (2.54, -1.08))
+W_TE = curve((0.5, -0.42), (0.9, -0.48), (1.9, -0.92), (2.54, -1.08))
 W_Z = curve((0.5, 0.86), (0.9, 0.82), (1.9, 0.55), (2.54, 0.27))
-W_T = curve((0.5, 0.17), (0.9, 0.15), (1.9, 0.08), (2.54, 0.04))
+W_T = curve((0.5, 0.2), (0.9, 0.19), (1.9, 0.13), (2.54, 0.065))
 W_AT = (0.5, 0.9, 1.3, 1.7, 2.1, 2.36, 2.54)
 # Its spar and its flap's hinge: the shares of its chord they lie at (0 its
 # trailing edge), and the spans its two cross seams lie at.
-SPAR, FLAP = 0.6, 0.26
+SPAR, FLAP = 0.5, 0.22
 RIBS_AT = (1.42, 1.95)
 # The hinge it hangs from: a bare barrel along the body's flank (where along
 # the craft its middle is, how long, how far out, how high, how thick), and
 # the jacks under the wing: where each leaves the body (along the craft) and
 # the span it meets the wing at.
-HINGE = (-0.2, 1.15, 0.88, 0.83, 0.1)
-JACKS = ((0.18, 1.3), (-0.6, 1.22))
+HINGE = (0.02, 0.96, 0.88, 0.83, 0.1)
+JACKS = ((0.22, 1.3), (-0.22, 1.2))
 # The pod at its tip: how far it runs ahead of the tip's leading edge and
 # behind its trailing edge, and how thick.
 POD = (0.2, 0.12, 0.052)
@@ -110,8 +111,8 @@ POD = (0.2, 0.12, 0.052)
 # their width at its widest and their width along their length as shares of
 # it, how thin they are for it, and how far they are canted, degrees (their
 # outer edges high: from its own saddle a pilot sees their faces).
-BLADE = (-0.95, -2.28, 0.58, 0.19, 0.76, 0.3)
-BLADE_WIDE = 0.17
+BLADE = (-0.95, -2.28, 0.58, 0.3, 0.76, 0.52)
+BLADE_WIDE = 0.23
 BLADE_SHAPE = (0.45, 0.7, 0.88, 1.0, 1.0, 1.0, 0.86, 0.5, 0.1)
 BLADE_THIN = 0.2
 BLADE_CANT = 40
@@ -245,7 +246,7 @@ flap = lambda q: (share(q) - FLAP) * chord(q)
 def wing(side):
     n = 12
     o = solid(loft([foil(side * y, W_LE(y), W_TE(y), W_Z(y), W_T(y), n=n, under=0.8) for y in W_AT], 'shell_deep',
-                   ends=('flat', 'tip'), name='wing', sharp=(0, n // 2)), 'wing')
+                   ends=('flat', 'tip'), name='wing', sharp=(0, 2, n // 2)), 'wing')
     seam(o, spar, 0.04, 0.014, flat=0.5, within=lambda q: both(Y(q) - 0.98, 2.05 - Y(q)))
     seam(o, flap, **SEAM, within=lambda q: both(Y(q) - 1.0, RIBS_AT[1] - Y(q)))
     for y in RIBS_AT:
@@ -262,13 +263,13 @@ def wing(side):
     lamp.data.materials.append(skin('light'))
     out.append(lamp)
     # The hinge it hangs from: a barrel of bare alloy in the body's flank,
-    # three collars of iron round it.
+    # two collars of iron round it.
     hx, long, hy, hz, r = HINGE
     barrel = cyl(r, long, at=(hx, side * hy, hz), material=None, verts=14, bevel=0.004)
     barrel.data.materials.append(skin('alloy'))
     out.append(barrel)
-    for k in (-0.42, 0.0, 0.42):
-        collar = cyl(r * 1.16, 0.075, at=(hx + long * k, side * hy, hz), material=None, verts=14, bevel=0.004)
+    for k in (-0.36, 0.36):
+        collar = cyl(r * 1.12, 0.06, at=(hx + long * k, side * hy, hz), material=None, verts=14, bevel=0.004)
         collar.data.materials.append(skin('iron'))
         out.append(collar)
     # The jacks under it: a barrel of iron out of the body's flank under the
@@ -289,8 +290,10 @@ def lance(side):
     """A gun's fairing out of the wing's leading edge, its barrel in an
     iron collar, and the ring of light behind its muzzle."""
     y, z = side * GUNS[1], GUNS[2]
-    r = curve((-0.8, 0.02), (-0.4, 0.1), (0.0, 0.13), (0.4, 0.115), (0.62, 0.09), (0.7, 0.08))
-    pod = loft([oval(x, y, z, r(x), r(x), n=10, p=2.0) for x in (-0.8, -0.6, -0.4, -0.2, 0.0, 0.2, 0.4, 0.62, 0.7)],
+    # (Slim: a gun on the blade. Fatter than the pod at the blade's tip, it
+    # was the wing's end and the blade past it an afterthought.)
+    r = curve((-0.5, 0.02), (-0.25, 0.075), (0.0, 0.095), (0.4, 0.09), (0.62, 0.08), (0.7, 0.075))
+    pod = loft([oval(x, y, z, r(x), r(x), n=10, p=2.0) for x in (-0.5, -0.35, -0.2, 0.0, 0.2, 0.4, 0.62, 0.7)],
                'shell_deep', ends=('tip', 'flat'), name='lance', levels=1)
     out = []
     for at, long, wide, paint in ((0.74, 0.1, 0.075, 'iron'), (0.92, 0.3, 0.05, 'iron'), (GUNS[0] - 0.1, 0.06, 0.075, 'light_dim'),
@@ -299,7 +302,7 @@ def lance(side):
         part.data.materials.append(skin(paint))
         out.append(part)
     # The pylon it rides the wing on.
-    pylon = box(0.5, 0.05, 0.13, at=(-0.5, y, z - 0.09), material=None, bevel=0.008)
+    pylon = box(0.4, 0.05, 0.13, at=(-0.45, y, z - 0.09), material=None, bevel=0.008)
     pylon.data.materials.append(skin('iron'))
     return [pod, pylon] + out
 

@@ -98,7 +98,7 @@ const SKIM_GRIPS: [Vec3; 2] = [Vec3::new(-0.18, 1.24, -0.285), Vec3::new(-0.18, 
 /// metres, and how long it lasts, seconds: short, a few metres of light at
 /// a boost's speed and never a beam down the screen from the chase camera.
 const FLY_TRAILS: ([Vec3; 2], f32, f32) = (
-    [Vec3::new(-2.26, 1.05, -0.77), Vec3::new(-2.26, 1.05, 0.77)],
+    [Vec3::new(-2.26, 1.27, -0.87), Vec3::new(-2.26, 1.27, 0.87)],
     0.09,
     0.09,
 );

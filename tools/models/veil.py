@@ -38,7 +38,7 @@ PAINTS = {
     'shell_pale': ('#4c3b66', 0.85, 0.22, None, 0.0),
     'iron': ('#1d1d22', 0.90, 0.55, None, 0.0),
     # Bare alloy, for what stands in a dark throat and must still be seen.
-    'alloy': ('#5a5b63', 0.95, 0.40, None, 0.0),
+    'alloy': ('#8a8c96', 0.90, 0.45, None, 0.0),
     'glass': ('#07070d', 0.60, 0.07, None, 0.0),
     'pad': ('#141218', 0.00, 0.85, None, 0.0),
     'light': ('#06232a', 0.00, 0.30, ('#8ff6ff', 9.0), 0.0),
