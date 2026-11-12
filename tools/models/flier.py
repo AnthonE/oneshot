@@ -291,25 +291,43 @@ for side in (1, -1):
     parts += wing(side)
 
 
+# A lance: the gun's fairing, a prong grown out of the wing's leading edge in
+# the wing's own plane and paint. Along the craft at each station: half its
+# width, half its depth, and how much of the wing's droop it lies at (1 at
+# its root, in the wing; 0 at its muzzle, level); its middle's height runs
+# from the wing's own at the gun's span up to the muzzle the sim fires from.
+L_AT = (-0.86, -0.62, -0.34, -0.08, 0.18, 0.44, 0.64, 0.72)
+L_WIDE = (0.02, 0.15, 0.19, 0.17, 0.125, 0.085, 0.064, 0.058)
+L_DEEP = (0.02, 0.07, 0.086, 0.086, 0.076, 0.064, 0.056, 0.052)
+L_ROLL = (1.0, 1.0, 1.0, 0.9, 0.6, 0.25, 0.0, 0.0)
+
+
 def lance(side):
-    """A gun's fairing out of the wing's leading edge, its barrel in an
-    iron collar, and the ring of light behind its muzzle."""
+    """A gun, as part of its wing: a flat prong out of the blade's leading
+    edge, creased down its two edges as the blade is and lying at the blade's
+    own droop, drawn forward and up to a short barrel in an iron collar and
+    the ring of light behind its muzzle. (It was a pod on a pylon over the
+    wing: a thing bolted on.)"""
     y, z = side * GUNS[1], GUNS[2]
-    # (Slim: a gun on the blade. Fatter than the pod at the blade's tip, it
-    # was the wing's end and the blade past it an afterthought.)
-    r = curve((-0.5, 0.02), (-0.25, 0.075), (0.0, 0.095), (0.4, 0.09), (0.62, 0.08), (0.7, 0.075))
-    pod = loft([oval(x, y, z, r(x), r(x), n=10, p=2.0) for x in (-0.5, -0.35, -0.2, 0.0, 0.2, 0.4, 0.62, 0.7)],
-               'shell_deep', ends=('tip', 'flat'), name='lance', levels=1)
-    out = []
-    for at, long, wide, paint in ((0.74, 0.1, 0.075, 'iron'), (0.92, 0.3, 0.05, 'iron'), (GUNS[0] - 0.1, 0.06, 0.075, 'light_dim'),
-                                  (GUNS[0] - 0.035, 0.07, 0.056, 'iron')):
-        part = cyl(wide, long, at=(at, y, z), material=None, verts=18, bevel=0.004)
+    n = 12
+    droop = math.atan((W_Z(GUNS[1] + 0.05) - W_Z(GUNS[1] - 0.05)) / 0.1) * side
+    mid = curve((L_AT[0], W_Z(GUNS[1]) + 0.005), (-0.3, W_Z(GUNS[1]) + 0.01), (0.2, z - 0.07), (0.5, z - 0.008), (L_AT[-1], z))
+    rings = []
+    for x, w, h, k in zip(L_AT, L_WIDE, L_DEEP, L_ROLL):
+        turn = Matrix.Rotation(droop * k, 3, 'X')
+        rings.append([turn @ Vector((0.0, q.y, q.z)) + Vector((x, y, mid(x))) for q in oval(0.0, 0.0, 0.0, w, h, n=n, p=2.2)])
+    prong = solid(loft(rings, 'shell_deep', ends=('tip', 'flat'), name='lance', levels=1, sharp=(0, n // 2)), 'lance')
+    # A gap round it where the barrel's housing starts, and that housing the
+    # paler violet, as the wing's strake is.
+    seam(prong, plane((0.36, 0, 0), (1, 0, 0)), 0.03, 0.012, flat=0.5)
+    repaint(prong, 'shell_pale', where=lambda q: X(q) > 0.38, of='shell_deep')
+    out = [prong]
+    for at, long, wide, paint in ((0.735, 0.07, 0.066, 'iron'), (0.9, 0.3, 0.04, 'iron'), (GUNS[0] - 0.1, 0.05, 0.058, 'light_dim'),
+                                  (GUNS[0] - 0.035, 0.07, 0.047, 'iron')):
+        part = cyl(wide, long, at=(at, y, z), material=None, verts=16, bevel=0.004)
         part.data.materials.append(skin(paint))
         out.append(part)
-    # The pylon it rides the wing on.
-    pylon = box(0.4, 0.05, 0.13, at=(-0.45, y, z - 0.09), material=None, bevel=0.008)
-    pylon.data.materials.append(skin('iron'))
-    return [pod, pylon] + out
+    return out
 
 
 def fin():
