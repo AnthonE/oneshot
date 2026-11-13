@@ -9,16 +9,22 @@
 #   ci/trailer/make.sh art             # the page's still compositions alone: the poster, the key art,
 #                                      #   the capsule → out/
 #   ci/trailer/make.sh cues            # the scene times and the audio cue list → build/cues.json
+#   TRAILER_PAGE=update.html ci/trailer/make.sh [preview | stills …]
+#                                      # another cut: update.html, what is new since the trailer
+#                                      #   (the craft, Icefall, Pithead), from traces/film/update
+#                                      #   into build-update/ → out/oneshot-update.mp4
 #
 # trailer.html draws every frame as a pure function of t: render.mjs
 # screenshots it in headless Chromium (SwiftShader: no GPU needed) and pipes
 # the frames to ffmpeg; mix.py lays the theme, the announcer and the hits on
 # the cue list the page exports; sfx.py makes the hits.
 #
-# Footage: each NN-name.mp4 in SHOTS (default traces/film/trailer, written by
-# `ci/film.sh shoot ci/film/trailer-*.json`) becomes clips/<name>/ as JPEG
-# frames at 1920x1080; a NN-name.png there (a still, or the title's Triple T
-# from `ci/film.sh pose`) is a one-frame clip. A scene whose clip is missing falls back to a store
+# Footage: each NN-name.mp4 in SHOTS (default traces/film/<page's name>,
+# written by `ci/film.sh shoot ci/film/trailer-*.json`) becomes clips/<name>/
+# as JPEG frames at 1920x1080, and the game's sound the film wrote beside it
+# (NN-name.wav) clipsnd/<name>.wav, which a cue list may lay as a music row;
+# a NN-name.png there (a still, or the title's Triple T from `ci/film.sh
+# pose`) is a one-frame clip. A scene whose clip is missing falls back to a store
 # still from scry-forge (FORGE=…, art/oneshot/play-*.jpg) with a slow push,
 # so the cut can be looked at before every shot is drawn.
 #
@@ -30,8 +36,12 @@ cd "$(dirname "$0")"
 HERE="$PWD"
 ONESHOT="$(cd ../.. && pwd)"
 FORGE="${FORGE:-$ONESHOT/../scry-forge}"
-SHOTS="${SHOTS:-$ONESHOT/traces/film/trailer}"
-PAGE=trailer.html
+PAGE="${TRAILER_PAGE:-trailer.html}"
+CUT="${PAGE%.html}"
+[ -s "$PAGE" ] || { echo "trailer: no page $PAGE" >&2; exit 1; }
+SHOTS="${SHOTS:-$ONESHOT/traces/film/$CUT}"
+# the house cut keeps its names (build/, out/oneshot-trailer*); another is its own
+if [ "$CUT" = trailer ]; then TAG=""; ARTS=poster,keyart,capsule,square,scope,banner; else TAG="-$CUT"; ARTS=poster; fi
 fail() { echo "trailer: $*" >&2; exit 1; }
 command -v ffmpeg >/dev/null || fail "no ffmpeg"
 command -v node >/dev/null || fail "no node"
@@ -48,8 +58,9 @@ while [ $# -gt 0 ]; do
   esac
 done
 
-B="$HERE/build"
-mkdir -p "$B"/{lib,fonts,img,glb,clips,music,snd,voice,sfx,node_modules} "$HERE/out"
+B="$HERE/build$TAG"
+OUT="$HERE/out/oneshot-$CUT"
+mkdir -p "$B"/{lib,fonts,img,glb,clips,clipsnd,music,snd,voice,sfx,node_modules} "$HERE/out"
 
 # three.js r160 and the glTF loader (the game's GLBs are plain JPEG-textured)
 T3=https://cdn.jsdelivr.net/npm/three@0.160.0
@@ -74,7 +85,7 @@ cp "$ONESHOT"/crates/client/assets/fonts/Unitblock.ttf "$ONESHOT"/crates/client/
 # game's own renders: ci/film.sh pose draws the title's Triple T)
 M="$ONESHOT/crates/client/assets/models"
 for m in helmet beanie ten-gallon hardhat aviators shades goggles respirator welder skull demon visor \
-         hightops-right spurs-right magboots-right loggers-right wellies-right sword; do
+         hightops-right spurs-right magboots-right loggers-right wellies-right pillboots-right pillboots-left sword; do
   [ -s "$M/$m.glb" ] && cp "$M/$m.glb" "$B/glb/" || echo "trailer: no model $m (skipped)" >&2
 done
 
@@ -84,9 +95,9 @@ for s in bigteam bulkhead chrysalis cistern dryfork fighter square; do
 done
 
 # footage: every NN-name.mp4 a shot list wrote, as JPEG frames at 1920x1080
-python3 - "$SHOTS" "$B/clips" <<'PY'
-import glob, json, os, re, subprocess, sys
-src, dst = sys.argv[1], sys.argv[2]
+python3 - "$SHOTS" "$B/clips" "$B/clipsnd" <<'PY'
+import glob, json, os, re, shutil, subprocess, sys
+src, dst, snd = sys.argv[1], sys.argv[2], sys.argv[3]
 index = {}
 for mp4 in sorted(glob.glob(os.path.join(src, "*.mp4"))) if os.path.isdir(src) else []:
     name = re.sub(r"^\d+-", "", os.path.basename(mp4)[:-4])
@@ -109,6 +120,8 @@ for mp4 in sorted(glob.glob(os.path.join(src, "*.mp4"))) if os.path.isdir(src) e
             continue
         open(stamp, "w").write(str(os.path.getmtime(mp4)))
     index[name] = len(glob.glob(os.path.join(out, "*.jpg")))
+    if os.path.exists(mp4[:-4] + ".wav"):
+        shutil.copyfile(mp4[:-4] + ".wav", os.path.join(snd, name + ".wav"))
 # a still (NN-name.png, a shot with `still: true`) is a one-frame clip
 for png in sorted(glob.glob(os.path.join(src, "*.png"))) if os.path.isdir(src) else []:
     name = re.sub(r"^\d+-", "", os.path.basename(png)[:-4])
@@ -133,13 +146,15 @@ for s in shot_sniper_0 shot_sniper_far_0 headshot_0 headshot_1 shield_pop_0 shie
          shot_br_0 shot_br_1 shot_ar_0 shot_rifle_0 shot_magnum_0 shot_shotgun_0 shot_rocket_0 shot_smg_0 sword_swing_0 sword_on_0 \
          sword_swing_1 shot_carbine_0 shot_beam_0 shot_ion_0 shot_ionp_0 shot_ion_charged_0 shot_shards_0 shot_launcher_0 shot_cannon_0 shot_minigun_0 \
          blast_0 blast_1 rocket_fly_0 reload_br_0 reload_sniper_0 swap_0 swap_1 pickup_0 pickup_1 launch_0 jump_0 land_0 \
-         engine_0 ride_0 skid_0 crash_0 truck_land_0 flyby_0 flyby_1 ricochet_0 bullet_metal_0 impact_metal_0 melee_hit_0 \
+         engine_0 ride_0 ride_1 skid_0 crash_0 truck_land_0 flyby_0 flyby_1 flyby_2 ricochet_0 bullet_metal_0 impact_metal_0 melee_hit_0 \
+         bolt_hit_0 bolt_hit_1 shot_ionp_1 surf_0 step_rock_0 step_gravel_0 \
          match_found_0 go_0 ui_click_0 ui_hover_0 tick_0 over_on_0 camo_on_0 spawn_0 sticky_stick_0 grenades_0 throw_0 \
          room_hum_0 wind_0 surf_0 vent_0 charge_hold_0 shield_charge_0 shield_beep_0 step_metal_0 step_concrete_0; do
   [ -s "$S/$s.ogg" ] && cp "$S/$s.ogg" "$B/snd/" || true
 done
 for v in slayer team_slayer free_for_all gun_game capture_the_flag double_kill triple_kill overkill killstorm killing_spree \
          running_riot rampage untouchable unstoppable extermination perfection game_over game_over_you_win taken_lead one_minute \
+         killing_frenzy invincible inconceivable team_slayer \
          flag_taken flag_captured flag_dropped flag_returned killstorm game_over_you_win; do
   [ -s "$S/voice/$v.ogg" ] && cp "$S/voice/$v.ogg" "$B/voice/" || true
 done
@@ -161,9 +176,9 @@ cues)
   python3 -c "import json; t = json.load(open('$B/cues.json')); print('trailer: %.1f s' % t['TOTAL']); [print('  %6.2f  %s' % (s['t0'], s['id'])) for s in t['SCENES']]"
   exit 0 ;;
 art)
-  node "$B/render.mjs" art "$HERE/out" poster,keyart,capsule,square,scope,banner
+  node "$B/render.mjs" art "$HERE/out$TAG" "$ARTS"
   # the poster as the store's JPEG beside the PNGs
-  ffmpeg -v error -y -i "$HERE/out/poster.png" -q:v 2 "$HERE/out/oneshot-trailer-poster.jpg"
+  ffmpeg -v error -y -i "$HERE/out$TAG/poster.png" -q:v 2 "$OUT-poster.jpg"
   ls -la "$HERE"/out/; exit 0 ;;
 esac
 
@@ -178,7 +193,7 @@ if [ "$MODE" = preview ]; then
   TRAILER_STEP=4 node "$B/render.mjs" video "$B/preview.mkv"
   ffmpeg -v error -y -i "$B/preview.mkv" -i "$B/mix.wav" -map 0:v -map 1:a -af "$AF" -ar 48000 \
     -vf scale=1280:720 -r 30 -c:v libx264 -preset veryfast -crf 26 -pix_fmt yuv420p -c:a aac -b:a 160k -shortest \
-    "$HERE/out/oneshot-trailer-preview.mp4"
+    "$OUT-preview.mp4"
   ls -la "$HERE"/out/; exit 0
 fi
 
@@ -201,13 +216,13 @@ done
 ffmpeg -v error -y -f concat -safe 0 -i "$B/parts/list.txt" -c copy "$B/silent.mkv"
 ffmpeg -v error -y -i "$B/silent.mkv" -i "$B/mix.wav" -map 0:v -map 1:a -af "$AF" -ar 48000 \
   -c:v libx264 -preset slow -crf 19 -maxrate 8M -bufsize 16M -pix_fmt yuv420p -c:a aac -b:a 192k -movflags +faststart -shortest \
-  "$HERE/out/oneshot-trailer.mp4"
-ffmpeg -v error -y -i "$HERE/out/oneshot-trailer.mp4" -vf scale=1280:720:flags=lanczos -c:v libx264 -preset slow -crf 23 -maxrate 3M -bufsize 6M \
-  -pix_fmt yuv420p -c:a copy -movflags +faststart "$HERE/out/oneshot-trailer-720p.mp4"
+  "$OUT.mp4"
+ffmpeg -v error -y -i "$OUT.mp4" -vf scale=1280:720:flags=lanczos -c:v libx264 -preset slow -crf 23 -maxrate 3M -bufsize 6M \
+  -pix_fmt yuv420p -c:a copy -movflags +faststart "$OUT-720p.mp4"
 # the store's copy (scry-forge's watchtower/art/store/oneshot-trailer.mp4): 720p under 2 Mbps, so the page's
 # player, which downloads nothing until play, has a film the size of the other titles'
-ffmpeg -v error -y -i "$HERE/out/oneshot-trailer.mp4" -vf scale=1280:720:flags=lanczos -c:v libx264 -preset slow -crf 25 -maxrate 1.6M -bufsize 3.2M \
-  -pix_fmt yuv420p -c:a aac -b:a 128k -movflags +faststart "$HERE/out/oneshot-trailer-web.mp4"
-node "$B/render.mjs" art "$HERE/out" poster,keyart,capsule,square,scope,banner
-ffmpeg -v error -y -i "$HERE/out/poster.png" -q:v 2 "$HERE/out/oneshot-trailer-poster.jpg"
+ffmpeg -v error -y -i "$OUT.mp4" -vf scale=1280:720:flags=lanczos -c:v libx264 -preset slow -crf 25 -maxrate 1.6M -bufsize 3.2M \
+  -pix_fmt yuv420p -c:a aac -b:a 128k -movflags +faststart "$OUT-web.mp4"
+node "$B/render.mjs" art "$HERE/out$TAG" "$ARTS"
+ffmpeg -v error -y -i "$HERE/out$TAG/poster.png" -q:v 2 "$OUT-poster.jpg"
 ls -la "$HERE"/out/

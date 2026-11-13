@@ -1,0 +1,51 @@
+{
+ "tape": "traces/film/relit-proving.tape",
+ "out": "traces/film/update",
+ "width": 1600,
+ "height": 900,
+ "fps": 30,
+ "quality": "high",
+ "settle": 20,
+ "hold": 24,
+ "look": {
+  "saturation": 1.06,
+  "contrast": 1.05,
+  "shutter": 0.5
+ },
+ "shots": [
+  {
+   "name": "relit-proving",
+   "at": 5.0,
+   "len": 1.5,
+   "fov": 56,
+   "keys": [
+    {
+     "t": 0,
+     "pos": [
+      -22,
+      1.7,
+      -18
+     ],
+     "look": [
+      8,
+      2.2,
+      6
+     ]
+    },
+    {
+     "t": 1.5,
+     "pos": [
+      -20.6,
+      1.7,
+      -16.8
+     ],
+     "look": [
+      8,
+      2.2,
+      6
+     ]
+    }
+   ]
+  }
+ ]
+}

@@ -1,0 +1,123 @@
+{
+ "tape": "traces/film/ice-flier3.tape",
+ "out": "traces/film/update",
+ "width": 1600,
+ "height": 900,
+ "fps": 30,
+ "quality": "high",
+ "settle": 20,
+ "hold": 24,
+ "look": {
+  "saturation": 1.06,
+  "contrast": 1.05,
+  "shutter": 0.5
+ },
+ "shots": [
+  {
+   "name": "fl-launch",
+   "at": 44.0,
+   "len": 4.8,
+   "fov": 58,
+   "follow": {
+    "back": 9.0,
+    "up": 2.6,
+    "side": 2.0,
+    "lag": 0.3
+   },
+   "look": {
+    "focus": "subject",
+    "fstop": 5.6,
+    "shake": 0.06
+   }
+  },
+  {
+   "name": "fl-hero",
+   "at": 50.0,
+   "len": 6.2,
+   "speed": 0.5,
+   "fov": 48,
+   "follow": {
+    "back": 2.0,
+    "up": 1.2,
+    "side": 9.0,
+    "lag": 0.15
+   },
+   "look": {
+    "focus": "subject",
+    "fstop": 4
+   }
+  },
+  {
+   "name": "fl-dive",
+   "at": 58.0,
+   "len": 1.0,
+   "fov": 62,
+   "follow": {
+    "back": 7.0,
+    "up": 0.4,
+    "side": -4.0,
+    "lag": 0.2
+   },
+   "look": {
+    "focus": "subject",
+    "fstop": 5.6,
+    "shake": 0.1
+   }
+  },
+  {
+   "name": "fl-guns",
+   "at": 71.0,
+   "len": 2.6,
+   "fov": 62,
+   "follow": {
+    "back": 8.0,
+    "up": 3.0,
+    "side": 1.5,
+    "lag": 0.25
+   },
+   "look": {
+    "focus": "subject",
+    "fstop": 5.6,
+    "shake": 0.08
+   }
+  },
+  {
+   "name": "fl-roll",
+   "at": 86.0,
+   "len": 3.6,
+   "fov": 58,
+   "follow": {
+    "back": 9.0,
+    "up": 2.0,
+    "side": -3.0,
+    "lag": 0.3
+   },
+   "look": {
+    "focus": "subject",
+    "fstop": 5.6,
+    "shake": 0.06
+   }
+  },
+  {
+   "name": "ice-bt-2",
+   "at": 104.0,
+   "len": 2.0,
+   "fov": 58,
+   "follow": {
+    "back": 18.0,
+    "up": 8.0,
+    "side": 4.0,
+    "lag": 0.4
+   },
+   "look": {
+    "shake": 0.04
+   }
+  },
+  {
+   "name": "fl-pov",
+   "at": 106.2,
+   "len": 1.5,
+   "pov": true
+  }
+ ]
+}

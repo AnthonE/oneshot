@@ -180,6 +180,15 @@ fn run() -> Result<(), String> {
         app.world_mut().resource_mut::<oneshot_client::Autoplay>().scope = flag("--scope");
         // Or works its gun at a wall (`tools/reel.sh`).
         app.world_mut().resource_mut::<oneshot_client::Autoplay>().drill = flag("--drill");
+        // Or flies a one-seater (a film of the craft: `ci/film.sh record`).
+        if let Some(k) = arg("--pilot") {
+            let kind = match k.as_str() {
+                "skimmer" => sim::vehicle::SKIMMER,
+                "flier" => sim::vehicle::FLIER,
+                _ => return Err(format!("--pilot {k}: skimmer or flier")),
+            };
+            app.world_mut().resource_mut::<oneshot_client::Autoplay>().pilot = Some(kind);
+        }
         // For this run: the settings file keeps the player's own
         // (`settings::run_as`).
         if let Some(n) = arg("--name") {

@@ -274,6 +274,13 @@ pub struct Autoplay {
     /// it began to.
     stood: f64,
     walking: f64,
+    /// Fly a one-seater instead of a fight on foot (`--pilot skimmer|flier`,
+    /// a film of the craft): walk to the nearest free one of this kind
+    /// (`sim::vehicle::SKIMMER`, `FLIER`), board it and fly, [`pilot`].
+    pub pilot: Option<u8>,
+    /// Until when (ms) the pilot fights on foot: its craft was not where
+    /// the map keeps it.
+    no_craft: f64,
 }
 
 /// How often the autopilot checks it is getting somewhere, how far counts,
@@ -1154,6 +1161,9 @@ fn autopilot(auto: &mut Autoplay, look: &mut Look, core: &client_net::core::NetC
     if auto.drill {
         return drill(auto, look, core, now);
     }
+    if let Some(out) = auto.pilot.and_then(|kind| pilot(auto, look, core, now, kind)) {
+        return out;
+    }
     let (f, me) = core.own();
     let mate = core.rules.teams.then_some(core.team);
     let best = core
@@ -1211,6 +1221,223 @@ fn autopilot(auto: &mut Autoplay, look: &mut Look, core: &client_net::core::NetC
         );
     }
     (fire, strafe, if dist > 8.0 { 127 } else { 0 })
+}
+
+/// The pilot (`--pilot`): how near it stands to a craft to board it (inside
+/// the sim's reach, which is to the craft's middle: a flier's wings keep a
+/// body out past it at their tips, where it sidesteps along them), how far
+/// from the craft a launcher may land it, how
+/// near a leg of its route counts on the ground and in the air, how high it
+/// flies the flier over the ground and how far ahead it reads that ground,
+/// how near an enemy is to be fought, and how long it fights on foot when
+/// its craft is not where the map keeps it.
+const PILOT_BOARD_M: f32 = sim::consts::ENTER_R - 0.15;
+/// How far ahead on foot it looks for a launcher to step round, metres,
+/// and how long it sidesteps a wall it is stuck at, ms.
+const PILOT_LOOKAHEAD_M: f32 = 2.5;
+const PILOT_SIDESTEP_MS: f64 = 2500.0;
+const PILOT_LAUNCH_M: f32 = 40.0;
+const PILOT_LEG_M: f32 = 12.0;
+const PILOT_LEG_AIR_M: f32 = 24.0;
+const PILOT_ALT_M: f32 = 16.0;
+const PILOT_AHEAD_M: f32 = 30.0;
+const PILOT_FIGHT_M: f32 = 70.0;
+const PILOT_GIVE_UP_MS: f64 = 15000.0;
+/// The flier's climb and dive at most, radians; and its rhythm: a boost of
+/// this long in every so long, and a roll every so long, JUMP held this
+/// long for it (long enough for a frame on a slow machine to see it).
+const PILOT_PITCH: f32 = 0.6;
+const PILOT_BOOST_S: (f64, f64) = (2.6, 8.0);
+const PILOT_ROLL_S: (f64, f64) = (0.5, 9.0);
+/// How long it backs off a wall it is stuck at, ms.
+const PILOT_BACK_MS: f64 = 1200.0;
+
+/// One frame of the pilot: at the controls, [`steer`]; on foot, to the
+/// nearest free craft of `kind` (up a launcher if it stands on a roof)
+/// and in with USE. None: it fights on foot this frame, the autopilot's way.
+fn pilot(
+    auto: &mut Autoplay,
+    look: &mut Look,
+    core: &client_net::core::NetCore,
+    now: f64,
+    kind: u8,
+) -> Option<(u16, i32, i32)> {
+    let (f, me) = core.own();
+    if !f.alive {
+        return Some((0, 0, 0));
+    }
+    if let Some((v, at, _)) = core.own_vehicle() {
+        return Some(steer(auto, look, core, now, &v, at));
+    }
+    if now < auto.no_craft {
+        return None;
+    }
+    let near = |a: &sim::geom::V3, b: &sim::geom::V3| (*a - me).flat().len().total_cmp(&(*b - me).flat().len());
+    let seen = core
+        .vehicles(now)
+        .into_iter()
+        .filter(|v| v.kind == kind && v.seats[sim::vehicle::DRIVER] == 0)
+        .map(|v| v.pos)
+        .min_by(near);
+    let kept = core
+        .map
+        .vehicles
+        .iter()
+        .filter(|s| s.kind == kind)
+        .map(|s| s.pos)
+        .min_by(near);
+    let Some(craft) = seen.or(kept) else {
+        auto.no_craft = now + PILOT_GIVE_UP_MS;
+        return None;
+    };
+    let flat = (craft - me).flat().len();
+    if seen.is_none() && flat < PILOT_LEG_M {
+        auto.no_craft = now + PILOT_GIVE_UP_MS;
+        return None;
+    }
+    look.pitch = 0.0;
+    if seen.is_some() && flat < PILOT_BOARD_M && (craft.y - me.y).abs() < 2.0 {
+        // Tapped by tick, as the trigger is.
+        return Some((if f.last_buttons & USE == 0 { USE } else { 0 }, 0, 0));
+    }
+    let up = if craft.y - me.y > 3.0 && f.body.grounded {
+        launcher_to(&core.map, craft)
+    } else {
+        None
+    };
+    let goal = up.unwrap_or(craft);
+    look.yaw = (goal.z - me.z).atan2(goal.x - me.x);
+    // Not getting anywhere on foot (a wall between it and the craft, or a
+    // wing's tip): it sidesteps a while, one way then the next time the other.
+    if now - auto.checked >= AUTO_CHECK_MS {
+        if (me.x - auto.was.0).hypot(me.z - auto.was.1) < AUTO_MOVED_M {
+            auto.detour = now + PILOT_SIDESTEP_MS;
+            auto.leg += 1;
+        }
+        auto.was = (me.x, me.z);
+        auto.checked = now;
+    }
+    let side = if auto.leg & 1 == 1 { 127 } else { -127 };
+    if now < auto.detour {
+        let hop = flat > 2.0 * PILOT_BOARD_M && auto.frames & 31 == 0;
+        return Some((if hop { JUMP } else { 0 }, side, 60));
+    }
+    // A launcher it isn't taking, just ahead: round it, not over it.
+    let ahead = me + sim::geom::V3::new(look.yaw.cos(), 0.0, look.yaw.sin()) * PILOT_LOOKAHEAD_M;
+    let launch = up.is_none()
+        && core.map.launchers.iter().any(|l| {
+            let a = &l.area;
+            ahead.x > a.min.x - 0.5
+                && ahead.x < a.max.x + 0.5
+                && ahead.z > a.min.z - 0.5
+                && ahead.z < a.max.z + 0.5
+                && (a.min.y - me.y).abs() < 2.0
+        });
+    Some((0, if launch { side } else { 0 }, 127))
+}
+
+/// Where to stand to be thrown up to `to`: the launcher whose arc comes
+/// down at its height nearest it, if one lands within [`PILOT_LAUNCH_M`].
+fn launcher_to(map: &sim::map::Map, to: sim::geom::V3) -> Option<sim::geom::V3> {
+    let g = sim::consts::GRAVITY;
+    map.launchers
+        .iter()
+        .filter_map(|l| {
+            let mid = (l.area.min + l.area.max) * 0.5;
+            let disc = l.vel.y * l.vel.y - 2.0 * g * (to.y - l.area.min.y);
+            if disc < 0.0 {
+                return None;
+            }
+            let t = (l.vel.y + disc.sqrt()) / g;
+            let miss = (mid.x + l.vel.x * t - to.x).hypot(mid.z + l.vel.z * t - to.z);
+            Some((miss, sim::geom::V3::new(mid.x, l.area.min.y, mid.z)))
+        })
+        .filter(|(miss, _)| *miss < PILOT_LAUNCH_M)
+        .min_by(|a, b| a.0.total_cmp(&b.0))
+        .map(|(_, at)| at)
+}
+
+/// One frame at a one-seater's controls (the nose follows the aim, the
+/// stick throttles and strafes, CROUCH boosts, JUMP with a strafe rolls the
+/// flier): whoever fog shows near is closed on and shot, the flier's bomb
+/// dropped on them from above; else the map's roam route, the flier
+/// holding its height over the ground ahead, boosting and rolling on a
+/// rhythm a camera can catch. Stuck at a wall, it backs off and takes the
+/// next leg.
+fn steer(
+    auto: &mut Autoplay,
+    look: &mut Look,
+    core: &client_net::core::NetCore,
+    now: f64,
+    v: &sim::vehicle::Vehicle,
+    at: sim::geom::V3,
+) -> (u16, i32, i32) {
+    let flier = v.kind == sim::vehicle::FLIER;
+    if now - auto.checked >= AUTO_CHECK_MS {
+        if (at.x - auto.was.0).hypot(at.z - auto.was.1) < 2.0 * AUTO_MOVED_M {
+            auto.detour = now + PILOT_BACK_MS;
+            auto.leg += 1;
+        }
+        auto.was = (at.x, at.z);
+        auto.checked = now;
+    }
+    if now < auto.detour {
+        return (0, 0, -127);
+    }
+    let mate = core.rules.teams.then_some(core.team);
+    let foe = core
+        .others(now)
+        .into_iter()
+        .filter(|d| d.alive && Some(d.team & 1) != mate.map(|t| t & 1))
+        .map(|d| ((d.pos - at).len(), d))
+        .filter(|(dist, _)| *dist < PILOT_FIGHT_M)
+        .min_by(|a, b| a.0.total_cmp(&b.0));
+    if let Some((dist, d)) = foe {
+        let (dx, dz) = (d.pos.x - at.x, d.pos.z - at.z);
+        look.yaw = dz.atan2(dx);
+        look.pitch = (d.pos.y + 1.0 - (at.y + v.spec().h)).atan2(dx.hypot(dz));
+        let strafe = if (auto.frames >> 7) & 1 == 1 { 127 } else { -127 };
+        let over = flier && d.pos.y + 4.0 < at.y && dx.hypot(dz) < 20.0;
+        return (
+            FIRE | if over { FIRE_LEFT } else { 0 },
+            strafe,
+            if dist > 25.0 { 127 } else { 0 },
+        );
+    }
+    let route = &core.map.roam;
+    if route.is_empty() {
+        return (0, 0, 127);
+    }
+    let reach = if flier { PILOT_LEG_AIR_M } else { PILOT_LEG_M };
+    let mut t = route[auto.leg % route.len()];
+    if (t - at).flat().len() < reach {
+        auto.leg += 1;
+        t = route[auto.leg % route.len()];
+    }
+    look.yaw = (t.z - at.z).atan2(t.x - at.x);
+    look.pitch = 0.0;
+    let s = now / 1000.0;
+    let mut buttons = 0;
+    let mut strafe = 0;
+    if (t - at).flat().len() > 2.0 * reach && s % PILOT_BOOST_S.1 < PILOT_BOOST_S.0 {
+        buttons |= CROUCH;
+    }
+    if flier {
+        let ahead = at + sim::geom::V3::new(look.yaw.cos(), 0.0, look.yaw.sin()) * PILOT_AHEAD_M;
+        let floor = core.map.ground(ahead.x, ahead.z).max(core.map.ground(at.x, at.z));
+        look.pitch = (floor + PILOT_ALT_M - at.y)
+            .atan2(PILOT_AHEAD_M)
+            .clamp(-PILOT_PITCH, PILOT_PITCH);
+        if s % PILOT_ROLL_S.1 < PILOT_ROLL_S.0 {
+            buttons |= JUMP;
+            strafe = if (s / PILOT_ROLL_S.1) as u64 & 1 == 1 {
+                127
+            } else {
+                -127
+            };
+        }
+    }
+    (buttons, strafe, 127)
 }
 
 /// The drill's beats, seconds from when it took its stand: a burst at the

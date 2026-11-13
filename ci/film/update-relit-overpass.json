@@ -1,0 +1,51 @@
+{
+ "tape": "traces/film/relit-overpass.tape",
+ "out": "traces/film/update",
+ "width": 1600,
+ "height": 900,
+ "fps": 30,
+ "quality": "high",
+ "settle": 20,
+ "hold": 24,
+ "look": {
+  "saturation": 1.06,
+  "contrast": 1.05,
+  "shutter": 0.5
+ },
+ "shots": [
+  {
+   "name": "relit-overpass",
+   "at": 5.0,
+   "len": 1.5,
+   "fov": 56,
+   "keys": [
+    {
+     "t": 0,
+     "pos": [
+      2,
+      6.6,
+      14
+     ],
+     "look": [
+      40,
+      14.0,
+      60
+     ]
+    },
+    {
+     "t": 1.5,
+     "pos": [
+      2.8,
+      6.7,
+      15.4
+     ],
+     "look": [
+      40,
+      14.0,
+      60
+     ]
+    }
+   ]
+  }
+ ]
+}

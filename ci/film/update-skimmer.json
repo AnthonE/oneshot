@@ -1,0 +1,106 @@
+{
+ "tape": "traces/film/ice-skimmer3.tape",
+ "out": "traces/film/update",
+ "width": 1600,
+ "height": 900,
+ "fps": 30,
+ "quality": "high",
+ "settle": 20,
+ "hold": 24,
+ "look": {
+  "saturation": 1.06,
+  "contrast": 1.05,
+  "shutter": 0.5
+ },
+ "shots": [
+  {
+   "name": "sk-lake",
+   "at": 44.4,
+   "len": 4.8,
+   "fov": 60,
+   "follow": {
+    "back": 5.2,
+    "up": 1.4,
+    "side": 1.2,
+    "lag": 0.22
+   },
+   "look": {
+    "focus": "subject",
+    "fstop": 5.6,
+    "shake": 0.08
+   }
+  },
+  {
+   "name": "sk-boost",
+   "at": 82.0,
+   "len": 3.6,
+   "fov": 64,
+   "follow": {
+    "back": 6.0,
+    "up": 1.6,
+    "side": -1.0,
+    "lag": 0.2
+   },
+   "look": {
+    "focus": "subject",
+    "fstop": 5.6,
+    "shake": 0.1
+   }
+  },
+  {
+   "name": "sk-hero",
+   "at": 102.6,
+   "len": 3.6,
+   "speed": 0.5,
+   "fov": 50,
+   "follow": {
+    "back": 1.5,
+    "up": 1.0,
+    "side": 6.5,
+    "lag": 0.15
+   },
+   "look": {
+    "focus": "subject",
+    "fstop": 4
+   }
+  },
+  {
+   "name": "sk-pov",
+   "at": 105.0,
+   "len": 1.3,
+   "pov": true
+  },
+  {
+   "name": "sk-guns",
+   "at": 108.0,
+   "len": 2.6,
+   "fov": 62,
+   "follow": {
+    "back": 4.6,
+    "up": 1.8,
+    "side": 0.9,
+    "lag": 0.2
+   },
+   "look": {
+    "focus": "subject",
+    "fstop": 5.6,
+    "shake": 0.08
+   }
+  },
+  {
+   "name": "ice-bt",
+   "at": 120.0,
+   "len": 2.0,
+   "fov": 58,
+   "follow": {
+    "back": 14,
+    "up": 6,
+    "side": 3,
+    "lag": 0.35
+   },
+   "look": {
+    "shake": 0.05
+   }
+  }
+ ]
+}

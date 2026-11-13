@@ -1,0 +1,684 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><title>oneshot: what is new</title>
+<script type="importmap">{"imports":{"three":"./lib/build/three.module.js","three/addons/":"./lib/examples/jsm/"}}</script>
+<style>
+@font-face { font-family: "Unit"; src: url(fonts/Unitblock.ttf); font-weight: 400; }
+@font-face { font-family: "Ail"; src: url(fonts/Aileron-Regular.otf); font-weight: 400; }
+@font-face { font-family: "Ail"; src: url(fonts/Aileron-SemiBold.otf); font-weight: 600; }
+@font-face { font-family: "Ail"; src: url(fonts/Aileron-Bold.otf); font-weight: 700; }
+html, body { margin: 0; background: #000; overflow: hidden; }
+#stage { position: relative; width: 1920px; height: 1080px; background: #000; }
+#stage canvas { position: absolute; left: 0; top: 0; width: 1920px; height: 1080px; }
+</style></head>
+<body>
+<div id="stage">
+  <canvas id="bg" width="1920" height="1080"></canvas>
+  <canvas id="gl" width="1920" height="1080"></canvas>
+  <canvas id="fg" width="1920" height="1080"></canvas>
+</div>
+<script type="module">
+// oneshot's update trailer: what is new since the house trailer (trailer.html),
+// on the same theme and the same clock. Every frame is a pure function of t:
+// window.seek(t) draws it, render.mjs screenshots it, mix.py lays the audio
+// on the cue list this file exports. Footage is the game's own, shot with
+// ci/film.sh from ci/film/update-*.json into traces/film/update (the craft
+// flown by the autopilot's pilot, `FILM_CLIENT_ARGS='--pilot flier'`); the
+// boots are the game's own GLBs; every number on a craft's card is
+// crates/sim/src/consts.rs's or arms.rs's. The type is the game's
+// (Unitblock, Aileron) and the colours are ui.rs's.
+//   TRAILER_PAGE=update.html ci/trailer/make.sh [preview | stills t,…]
+import * as THREE from 'three';
+import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
+import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
+
+const W = 1920, H = 1080, FPS = 30;
+const Q = new URLSearchParams(location.search);
+
+// The theme (assets/sound/music/intro.ogg) pulses at about 56 bpm, and its
+// hits sit on a 1.068 s grid: the loudest one at 62.55 s is the drop. The
+// trailer's clock is set so the title lands on it, and every scene starts
+// on one of the hits measured off the track (MUSIC_IN turns a track time
+// into a trailer time).
+const DROP = 21.36;
+const MUSIC_IN = 62.55 - DROP;
+const hit = s => s - MUSIC_IN;          // a track hit's time in the trailer
+const grid = n => DROP + n * 1.068;     // the n-th beat after the drop
+
+const C = {
+  bg: '#1b1916', ink: '#eeebe6', muted: '#bdb8ad', faint: '#8d8a84', gold: '#e8b931', goldHi: '#f5cc54',
+  blue: '#3982ba', blueHi: '#4a94cc', red: '#d0352b', redHi: '#ef6a5e', elo: '#b8ff38', line: 'rgba(191,184,158,.22)',
+  panel: 'rgba(22,20,17,.88)', good: '#a6cf6e', warn: '#e38a6b',
+};
+
+const bg = document.getElementById('bg').getContext('2d');
+const fg = document.getElementById('fg').getContext('2d');
+
+// ── math ──────────────────────────────────────────────────────────────────
+const clamp = (x, a = 0, b = 1) => Math.max(a, Math.min(b, x));
+const ramp = (t, a, b) => clamp((t - a) / (b - a));
+const lerp = (a, b, u) => a + (b - a) * u;
+const E = {
+  out: u => 1 - Math.pow(1 - u, 3),
+  in: u => u * u * u,
+  io: u => (u < .5 ? 4 * u * u * u : 1 - Math.pow(-2 * u + 2, 3) / 2),
+  back: u => { const c1 = 1.70158, c3 = c1 + 1; return 1 + c3 * Math.pow(u - 1, 3) + c1 * Math.pow(u - 1, 2); },
+  expo: u => (u >= 1 ? 1 : 1 - Math.pow(2, -10 * u)),
+};
+function rng(seed) {
+  let s = seed >>> 0;
+  return () => { s = (s + 0x6D2B79F5) >>> 0; let t = s; t = Math.imul(t ^ (t >>> 15), t | 1); t ^= t + Math.imul(t ^ (t >>> 7), t | 61); return ((t ^ (t >>> 14)) >>> 0) / 4294967296; };
+}
+
+// ── assets ────────────────────────────────────────────────────────────────
+const IMG = {}, CLIPS = {};
+const loadImg = src => new Promise((res, rej) => { const i = new Image(); i.onload = () => res(i); i.onerror = () => rej(new Error(src)); i.src = src; });
+// the store's stills, stand-ins for footage not shot yet (make.sh copies them in)
+const STILLS = {};
+
+// ── drawing helpers ───────────────────────────────────────────────────────
+const BOX = { y: 138, h: 804 };         // the 2.39:1 picture inside the letterbox
+function cover(ctx, img, x, y, w, h, z = 1, px = 0, py = 0) {
+  const s = Math.max(w / img.width, h / img.height) * z;
+  const iw = img.width * s, ih = img.height * s;
+  ctx.drawImage(img, x + (w - iw) / 2 + px * (iw - w) / 2, y + (h - ih) / 2 + py * (ih - h) / 2, iw, ih);
+}
+function still(ctx, k, u, o = {}) {
+  const { z0 = 1.04, z1 = 1.12, x0 = 0, x1 = 0, y0 = 0, y1 = 0, grade = 'brightness(.85) contrast(1.06) saturate(.95)', full = false } = o;
+  const y = full ? 0 : BOX.y, h = full ? H : BOX.h;
+  if (!IMG[k]) { ctx.fillStyle = '#111'; ctx.fillRect(0, y, W, h); return; }
+  ctx.save(); ctx.beginPath(); ctx.rect(0, y, W, h); ctx.clip(); ctx.filter = grade;
+  cover(ctx, IMG[k], 0, y, W, h, lerp(z0, z1, u), lerp(x0, x1, u), lerp(y0, y1, u));
+  ctx.restore();
+}
+// Footage: the shot's frames if it was filmed, else its stand-in still with a
+// slow push. `lt` is screen seconds into the scene, `speed` retimes the clip,
+// `from` is seconds into the clip. Frames are 1920x1080; a boxed scene shows
+// their middle 804 rows.
+function foot(ctx, name, lt, d, o = {}) {
+  const { speed = 1, from = 0, grade = 'contrast(1.03)', fallback = 'dryfork', still: so = {}, full = false, z = 1, px = 0, py = 0 } = o;
+  const fr = CLIPS[name];
+  if (fr && fr.length) {
+    const i = clamp(Math.floor((from + lt * speed) * FPS), 0, fr.length - 1);
+    const im = fr[i];
+    if (!im) { still(ctx, fallback, clamp(lt / d), { ...so, full }); return; }
+    ctx.save(); ctx.filter = grade;
+    if (full) cover(ctx, im, 0, 0, W, H, z, px, py);
+    else {
+      // the middle of the frame, cropped to the box (and pushed in by z)
+      const sh = BOX.h / z, sw = W / z, sx = (W - sw) / 2, sy = (H - sh) / 2;
+      ctx.drawImage(im, sx, sy, sw, sh, 0, BOX.y, W, BOX.h);
+    }
+    ctx.restore();
+  } else still(ctx, fallback, clamp(lt / d), { ...so, full });
+}
+const clip = (...names) => names.find(n => CLIPS[n] && CLIPS[n].length) || names[0];
+const FONT = { unit: s => `400 ${s}px Unit`, ail: (s, w) => `${w || 400} ${s}px Ail` };
+function text(ctx, s, x, y, o = {}) {
+  const { kind = 'unit', size = 96, weight, color = C.ink, align = 'center', base = 'alphabetic', track = 0, alpha = 1, shadow = 0, glow = null, scale = 1, glowR = 48 } = o;
+  if (alpha <= 0.002) return;
+  ctx.save(); ctx.globalAlpha = clamp(alpha); ctx.font = FONT[kind](size, weight); ctx.textAlign = align; ctx.textBaseline = base;
+  ctx.letterSpacing = track + 'px'; ctx.fillStyle = color;
+  if (shadow) { ctx.shadowColor = 'rgba(0,0,0,.8)'; ctx.shadowBlur = shadow; ctx.shadowOffsetY = shadow / 5; }
+  if (glow) { ctx.shadowColor = glow; ctx.shadowBlur = glowR; }
+  const dx = track ? (align === 'center' ? track / 2 : align === 'right' ? track : 0) : 0;
+  if (scale !== 1) { ctx.translate(x, y); ctx.scale(scale, scale); ctx.fillText(s, dx, 0); } else ctx.fillText(s, x + dx, y);
+  ctx.restore();
+}
+function measure(s, kind, size, weight, track = 0) {
+  fg.save(); fg.font = FONT[kind](size, weight); fg.letterSpacing = track + 'px';
+  const w = fg.measureText(s).width - track; fg.restore(); return w;
+}
+// in at `at`, out over the scene's last `out` seconds
+function rv(L, at, len = .42, out = .2) {
+  const a = E.out(ramp(L.t, at, at + len)), o = 1 - ramp(L.t, L.d - out, L.d);
+  return { a: a * o, dy: (1 - a) * 28 };
+}
+function caption(L, lines, o = {}) {
+  const { y = 790, size = 88, at = .15, step = .45, color = C.ink, track = 6, lh = 1.06, align = 'center', x = W / 2, shadow = 34, ctx = fg } = o;
+  lines.forEach((ln, i) => {
+    const s = typeof ln === 'string' ? { s: ln } : ln; const r = rv(L, s.at ?? at + i * step);
+    text(ctx, s.s, x, y + i * size * lh + r.dy, { size: s.size || size, color: s.color || color, align, track, alpha: r.a, shadow, glow: s.glow });
+  });
+}
+// the line in the bottom letterbox bar, or under a graphic
+function sub(L, s, o = {}) {
+  const { y = 1022, at = .7, size = 32, color = C.muted, x = W / 2, align = 'center', ctx = fg, weight = 600, track = 1 } = o;
+  const r = rv(L, at); text(ctx, s, x, y + r.dy * .4, { kind: 'ail', size, weight, color, align, alpha: r.a, track });
+}
+function rrect(ctx, x, y, w, h, r) { ctx.beginPath(); ctx.roundRect(x, y, w, h, r); }
+function chip(ctx, x, y, s, o = {}) {
+  const { color = C.ink, size = 30, alpha = 1, fill = 'rgba(14,13,11,.78)', kind = 'ail', weight = 700, track = 2, dot = null, h = size * 1.9, stroke = null } = o;
+  if (alpha <= 0) return 0;
+  const tw = measure(s, kind, size, weight, track), iw = dot ? 26 : 0, w = tw + iw + size * 1.3;
+  ctx.save(); ctx.globalAlpha = clamp(alpha);
+  rrect(ctx, x - w / 2, y - h / 2, w, h, 3); ctx.fillStyle = fill; ctx.fill(); ctx.strokeStyle = stroke || color; ctx.lineWidth = 2; ctx.stroke();
+  let tx = x - w / 2 + size * .65;
+  if (dot) { ctx.beginPath(); ctx.arc(tx + 7, y, 7, 0, 7); ctx.fillStyle = dot; ctx.fill(); tx += iw; }
+  ctx.restore();
+  text(ctx, s, tx, y + size * .36, { kind, size, weight, color, align: 'left', track, alpha });
+  return w;
+}
+function chipW(s, o = {}) {
+  const { size = 30, kind = 'ail', weight = 700, track = 2, dot = null } = o;
+  return measure(s, kind, size, weight, track) + (dot ? 26 : 0) + size * 1.3;
+}
+function ground(ctx, glow = null, gx = W / 2, gy = H / 2, gr = 900) {
+  ctx.fillStyle = C.bg; ctx.fillRect(0, 0, W, H);
+  if (glow) { const g = ctx.createRadialGradient(gx, gy, 0, gx, gy, gr); g.addColorStop(0, glow); g.addColorStop(1, 'rgba(0,0,0,0)'); ctx.fillStyle = g; ctx.fillRect(0, 0, W, H); }
+}
+function pool(ctx, x, y, r, a) {   // a soft dark pool behind type over a busy frame
+  const g = ctx.createRadialGradient(x, y, 0, x, y, r); g.addColorStop(0, `rgba(0,0,0,${a})`); g.addColorStop(1, 'rgba(0,0,0,0)');
+  ctx.fillStyle = g; ctx.fillRect(x - r, y - r, 2 * r, 2 * r);
+}
+function shade(ctx, y0, y1, a0, a1) {   // a vertical darkening band behind type
+  const g = ctx.createLinearGradient(0, y0, 0, y1); g.addColorStop(0, `rgba(0,0,0,${a0})`); g.addColorStop(1, `rgba(0,0,0,${a1})`);
+  ctx.fillStyle = g; ctx.fillRect(0, y0, W, y1 - y0);
+}
+// The wordmark as ui.rs draws it: the word in the display face, the gold
+// rule under it, a line of text beneath. `s` scales the whole lockup.
+function wordmark(ctx, x, y, s = 1, o = {}) {
+  const { alpha = 1, line = 'ARENA SLAYER', glow = null, align = 'center', shadow = 30 } = o;
+  if (alpha <= 0) return;
+  const size = 220 * s, track = 18 * s;
+  text(ctx, 'ONESHOT', x, y, { size, track, alpha, shadow, glow, align, glowR: 70 * s });
+  const w = measure('ONESHOT', 'unit', size, 400, track);
+  const x0 = align === 'left' ? x : x - w / 2;
+  ctx.save(); ctx.globalAlpha = alpha; ctx.fillStyle = C.gold; ctx.fillRect(x0, y + 18 * s, w, Math.max(2, 7 * s)); ctx.restore();
+  if (line) text(ctx, line, align === 'left' ? x : x0 + w / 2, y + 70 * s, { kind: 'ail', size: 38 * s, weight: 700, color: C.muted, track: 10 * s, alpha, align: align === 'left' ? 'left' : 'center' });
+}
+// A reticle, the game's: a dot and four ticks.
+function reticle(ctx, x, y, r, alpha, color = C.ink) {
+  if (alpha <= 0) return;
+  ctx.save(); ctx.globalAlpha = alpha; ctx.strokeStyle = color; ctx.lineWidth = 3; ctx.lineCap = 'round';
+  for (const [dx, dy] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) { ctx.beginPath(); ctx.moveTo(x + dx * r * .45, y + dy * r * .45); ctx.lineTo(x + dx * r, y + dy * r); ctx.stroke(); }
+  ctx.beginPath(); ctx.arc(x, y, 3, 0, 7); ctx.fillStyle = color; ctx.fill(); ctx.restore();
+}
+
+// ── 3D: the game's own models ─────────────────────────────────────────────
+const renderer = new THREE.WebGLRenderer({ canvas: document.getElementById('gl'), antialias: true, alpha: true, preserveDrawingBuffer: true });
+renderer.setPixelRatio(1); renderer.setSize(W, H, false);
+renderer.outputColorSpace = THREE.SRGBColorSpace; renderer.toneMapping = THREE.ACESFilmicToneMapping; renderer.toneMappingExposure = 1.0;
+renderer.autoClear = false; renderer.setClearColor(0x000000, 0);
+const ENV = new THREE.PMREMGenerator(renderer).fromScene(new RoomEnvironment(), 0.04).texture;
+const gltf = new GLTFLoader();
+const loadGLB = url => new Promise((res, rej) => gltf.load(url, g => res(g.scene), undefined, rej));
+function prep(obj, env = .7) {
+  obj.traverse(m => { if (m.isMesh && m.material) { const ms = Array.isArray(m.material) ? m.material : [m.material]; ms.forEach(x => { x.envMapIntensity = env; }); } });
+  return obj;
+}
+// Lay a held model on its long axis along X, centred, scaled to `size`
+// metres long; `flip` turns it the other way round when its muzzle comes out
+// on the left. `upright` keeps the length standing (a blade, a hat's pile).
+function lay(obj, size, { flip = false, upright = false, pitch = 0 } = {}) {
+  let b = new THREE.Box3().setFromObject(obj), s = b.getSize(new THREE.Vector3());
+  const inner = new THREE.Group(); inner.add(obj);
+  // A long axis along Y is stood on X; along Z, turned onto X.
+  if (upright) { if (s.x >= s.y && s.x >= s.z) inner.rotation.z = Math.PI / 2; else if (s.z >= s.x && s.z >= s.y) inner.rotation.x = -Math.PI / 2; }
+  else if (s.y >= s.x && s.y >= s.z) inner.rotation.set(0, 0, -Math.PI / 2);
+  else if (s.z >= s.x && s.z >= s.y) inner.rotation.y = Math.PI / 2;
+  const mid = new THREE.Group(); mid.add(inner);
+  b = new THREE.Box3().setFromObject(mid); s = b.getSize(new THREE.Vector3());
+  const c = b.getCenter(new THREE.Vector3()); inner.position.sub(c);
+  if (flip) mid.rotation.y = Math.PI;
+  mid.rotation.x += pitch;
+  const pivot = new THREE.Group(); pivot.add(mid); pivot.scale.setScalar(size / Math.max(s.x, s.y, s.z));
+  return pivot;
+}
+// Stand a model on the floor at its centre, scaled to `size` metres tall
+// (or, `fit`, to `size` metres across its largest side).
+function stand(obj, size, fit = false) {
+  const b = new THREE.Box3().setFromObject(obj), s = b.getSize(new THREE.Vector3()), c = b.getCenter(new THREE.Vector3());
+  obj.position.set(-c.x, -b.min.y, -c.z);
+  const pivot = new THREE.Group(); pivot.add(obj); if (size) pivot.scale.setScalar(size / (fit ? Math.max(s.x, s.y, s.z) : s.y));
+  return pivot;
+}
+function stage(keyCol = 0xfff1dc, rimCol = 0x7fb4e6) {
+  const s = new THREE.Scene(); s.environment = ENV;
+  const hemi = new THREE.HemisphereLight(0xd6e4ff, 0x2a2419, .4);
+  const key = new THREE.DirectionalLight(keyCol, 2.4); key.position.set(2.0, 3, 2.6);
+  const rim = new THREE.DirectionalLight(rimCol, 2.0); rim.position.set(-2.6, 1.4, -2.4);
+  s.add(hemi, key, rim);
+  return { s, hemi, key, rim };
+}
+const cam = new THREE.PerspectiveCamera(30, W / H, .01, 100);
+function shoot(st, rect, pos, look, fov = 30) {
+  const [x, y, w, h] = rect;
+  cam.fov = fov; cam.aspect = w / h; cam.position.set(...pos); cam.lookAt(...look); cam.updateProjectionMatrix();
+  renderer.setViewport(x, H - y - h, w, h); renderer.setScissor(x, H - y - h, w, h); renderer.setScissorTest(true);
+  renderer.render(st.s, cam); renderer.setScissorTest(false);
+}
+
+// The gear: hats and boots, as the armory shows them.
+// The pill boots, as the armory shows them: a pair, turning.
+const S3 = {};
+async function build3D() {
+  S3.boots = stage(0xfff4e6, 0xffd36b); S3.boots.objs = [];
+  for (const [i, f] of ['pillboots-left', 'pillboots-right'].entries()) {
+    try {
+      const o = stand(prep(await loadGLB(`glb/${f}.glb`), .9), .62, true);
+      o.position.x = (i ? 1 : -1) * .36; S3.boots.s.add(o); S3.boots.objs.push(o);
+    } catch (e) { console.log('no model', f); }
+  }
+}
+
+// ── post: bars, grain, vignette, flashes ──────────────────────────────────
+const GRAIN = [];
+function makeGrain() {
+  for (let k = 0; k < 6; k++) {
+    const c = document.createElement('canvas'); c.width = 960; c.height = 540; const x = c.getContext('2d');
+    const d = x.createImageData(960, 540), r = rng(77 + k);
+    for (let i = 0; i < d.data.length; i += 4) { const v = 128 + (r() - .5) * 120; d.data[i] = d.data[i + 1] = d.data[i + 2] = v; d.data[i + 3] = 255; }
+    x.putImageData(d, 0, 0); GRAIN.push(c);
+  }
+}
+function post(g) {
+  const v = fg.createRadialGradient(W / 2, H / 2, H * .38, W / 2, H / 2, H * 1.05);
+  v.addColorStop(0, 'rgba(0,0,0,0)'); v.addColorStop(1, 'rgba(0,0,0,.5)'); fg.fillStyle = v; fg.fillRect(0, 0, W, H);
+  fg.save(); fg.globalCompositeOperation = 'soft-light'; fg.globalAlpha = .14; fg.drawImage(GRAIN[Math.floor(g * FPS) % GRAIN.length], 0, 0, W, H); fg.restore();
+  for (const [at, len, col, peak] of FLASHES) {
+    const u = (g - at) / len; if (u < 0 || u > 1) continue;
+    fg.save(); fg.globalAlpha = peak * (1 - E.out(u)); fg.fillStyle = col; fg.fillRect(0, 0, W, H); fg.restore();
+  }
+  const fin = 1 - ramp(g, 0, .8), fout = ramp(g, TOTAL - 1.2, TOTAL - .05);
+  const k = Math.max(fin, fout); if (k > 0) { fg.fillStyle = `rgba(0,0,0,${k})`; fg.fillRect(0, 0, W, H); }
+}
+
+// ── scene pieces ──────────────────────────────────────────────────────────
+// A mode card over footage: the mode's name big, a line under it, a side
+// chip (RANKED, CASUAL) in the bar.
+function modeCard(L, name, line, o = {}) {
+  const { tag = 'CASUAL', tagColor = C.muted, at = .12 } = o;
+  shade(bg, BOX.y + BOX.h - 300, BOX.y + BOX.h, 0, .62);
+  const r = rv(L, at, .36, .15);
+  text(fg, name, 120, 850 + r.dy, { size: 120, track: 10, align: 'left', alpha: r.a, shadow: 30 });
+  const r2 = rv(L, at + .22, .36, .15);
+  text(fg, line, 124, 910 + r2.dy, { kind: 'ail', size: 36, weight: 600, color: C.muted, align: 'left', alpha: r2.a, track: 1 });
+  const r3 = rv(L, at + .1, .3, .15);
+  chip(fg, W - 120 - chipW(tag, { size: 28 }) / 2, 846 + r3.dy, tag, { size: 28, alpha: r3.a, color: tagColor });
+}
+// A map's name card: the name in the bar, a number, the mode it hosts.
+function mapCard(L, n, name, line) {
+  shade(bg, BOX.y + BOX.h - 220, BOX.y + BOX.h, 0, .5);
+  const r = rv(L, .08, .3, .12);
+  const tag = String(n).padStart(2, '0'), nx = 120 + Math.max(80, measure(tag, 'ail', 34, 700, 4) + 28);
+  text(fg, tag, 120, 880 + r.dy, { kind: 'ail', size: 34, weight: 700, color: C.gold, align: 'left', alpha: r.a, track: 4 });
+  text(fg, name, nx, 884 + r.dy, { size: 84, track: 8, align: 'left', alpha: r.a, shadow: 26 });
+  const r2 = rv(L, .2, .3, .12);
+  text(fg, line, W - 120, 884 + r2.dy, { kind: 'ail', size: 32, weight: 600, color: C.muted, align: 'right', alpha: r2.a, track: 2 });
+}
+// A card for a craft: its footage on the left (shot slowed by the film),
+// its name and the sim's numbers for it on the right over a dark ground.
+function craftCard(L, name, clipName, lines, o = {}) {
+  const { from = 0, speed = 1, glow = 'rgba(57,130,186,.18)' } = o;
+  ground(bg, glow, 1400, 540, 900);
+  bg.save(); bg.beginPath(); bg.rect(0, BOX.y, 1180, BOX.h); bg.clip();
+  foot(bg, clipName, L.t, L.d, { from, speed, full: true, z: 1.12, grade: 'contrast(1.06) saturate(1.04)' });
+  bg.restore();
+  // the footage's edge feathers into the ground
+  const g = bg.createLinearGradient(980, 0, 1180, 0); g.addColorStop(0, 'rgba(27,25,22,0)'); g.addColorStop(1, C.bg);
+  bg.fillStyle = g; bg.fillRect(980, BOX.y, 200, BOX.h);
+  const r0 = rv(L, .08, .35, .15);
+  text(fg, name, 1230, 300 + r0.dy, { size: 104, track: 10, align: 'left', alpha: r0.a, shadow: 20 });
+  const rl = rv(L, .2, .35, .15);
+  fg.save(); fg.globalAlpha = rl.a; fg.fillStyle = C.gold; fg.fillRect(1234, 326 + rl.dy, 140, 5); fg.restore();
+  lines.forEach(([big, small], i) => {
+    const r = rv(L, .4 + i * .3, .35, .15);
+    text(fg, big, 1234, 420 + i * 112 + r.dy, { kind: 'unit', size: 46, track: 4, align: 'left', alpha: r.a, color: i % 2 ? C.ink : C.goldHi });
+    text(fg, small, 1236, 458 + i * 112 + r.dy, { kind: 'ail', size: 25, weight: 600, align: 'left', alpha: r.a, color: C.muted, track: 1 });
+  });
+}
+// A dark band under a caption, so white type holds over bright snow.
+const low = (full = false) => full ? shade(bg, H - 420, H, 0, .5) : shade(bg, BOX.y + BOX.h - 300, BOX.y + BOX.h, 0, .5);
+// A white kick over the picture as a cut lands.
+function kick(lt, k = 14, peak = .3, box = true) {
+  const a = Math.exp(-lt * k);
+  if (a > .04) { fg.save(); fg.globalAlpha = a * peak; fg.fillStyle = '#fff'; box ? fg.fillRect(0, BOX.y, W, BOX.h) : fg.fillRect(0, 0, W, H); fg.restore(); }
+}
+// Cuts inside a scene: [seconds into the scene, clip, seconds into the clip, label].
+function cutAt(cuts, t, d) {
+  let k = 0; while (k < cuts.length - 1 && t >= cuts[k + 1][0]) k++;
+  const [t0, name, from, label] = cuts[k];
+  return { k, name, from, label, lt: t - t0, d: (cuts[k + 1] ? cuts[k + 1][0] : d) - t0 };
+}
+
+// ── the scenes ────────────────────────────────────────────────────────────
+// Times are trailer seconds; each scene runs to the next one's start, and
+// every start is one of the theme's hits (`hit`) or on its grid after the
+// drop, the house trailer's clock, so the cuts land on the music. The last
+// scene's end is TOTAL.
+//
+// The cut is what is new since the house trailer: the cold open on Icefall
+// (the valley, the flier out of its hangar, the skimmer on the ice, a ramp
+// of the two in a fight), the title on the drop, Icefall's card and its
+// three ways across, the skimmer's card and a boost, the flier's card and a
+// roll, Big Team there, Pithead, every map relit, the pill boots, the end.
+const OPEN = hit(45.44);                    // the first big kick: the flier
+const SKIM = hit(49.69);                    // the skimmer
+const FIGHT = hit(53.98);                   // the two of them shooting
+const BUILD = hit(58.26);                   // the ramp's first cut
+const SLAM = hit(98.97);                    // EVERY MAP, RELIT.
+const SCENES = [
+  // cold open: the valley at rest, the wind over it
+  { id: 'c1-valley', at: 0, box: false, draw(L) {
+    foot(bg, 'ice-open', L.t, L.d, { full: true, grade: 'contrast(1.06) saturate(.9) brightness(.94)' });
+    low(true);
+    caption(L, ['SNOW ON THE GROUND.'], { y: 820, size: 80, at: 1.1, track: 8 });
+  } },
+  // the flier out of its hangar, on the kick
+  { id: 'c2-flier', at: OPEN, box: true, draw(L) {
+    foot(bg, 'fl-launch', L.t, L.d, { from: FROM['fl-launch'], grade: 'contrast(1.06) saturate(1.04)' });
+    low();
+    kick(L.t, 10, .45);
+    caption(L, ['WINGS IN THE AIR.'], { y: 820, size: 86, at: .35, track: 6 });
+  } },
+  { id: 'c3-skimmer', at: SKIM, box: true, draw(L) {
+    foot(bg, 'sk-lake', L.t, L.d, { from: FROM['sk-lake'], grade: 'contrast(1.06) saturate(1.04)' });
+    low();
+    kick(L.t, 12, .3);
+    caption(L, ['SOMETHING FAST ON THE ICE.'], { y: 820, size: 80, at: .3, track: 6 });
+  } },
+  // the two of them shooting, a cut each
+  { id: 'c4-fight', at: FIGHT, box: true, draw(L) {
+    const c = cutAt(FIGHTS, L.t, L.d);
+    foot(bg, c.name, c.lt, c.d, { from: c.from, grade: 'contrast(1.07) saturate(1.05)' });
+    low();
+    kick(c.lt, 14, .3);
+    caption(L, ['BOLTS FROM THE BLUE.'], { y: 820, size: 80, at: .3, track: 6 });
+  } },
+  // the ramp: faster and faster into the drop
+  { id: 'c5-ramp', at: BUILD, box: true, draw(L) {
+    const c = cutAt(RAMP, L.t, L.d);
+    foot(bg, c.name, c.lt, c.d, { from: c.from, grade: 'contrast(1.08) saturate(1.05)' });
+    kick(c.lt, 14, .35);
+  } },
+  // the drop
+  { id: 't1-title', at: DROP, draw(L) {
+    foot(bg, 'fl-hero', L.t, L.d, { full: true, from: FROM['fl-hero'] + 3.2, speed: .6, grade: 'brightness(.88) contrast(1.08) saturate(.98)' });
+    pool(bg, W / 2, 560, 1100, .7);
+    const s = lerp(1.25, 1, E.expo(ramp(L.t, 0, .5))), a = ramp(L.t, 0, .08) * (1 - ramp(L.t, L.d - .2, L.d));
+    fg.save(); fg.translate(W / 2, 560); fg.scale(s, s); fg.translate(-W / 2, -560); wordmark(fg, W / 2, 560, 1.0, { alpha: a, glow: 'rgba(232,185,49,.45)', line: '' }); fg.restore();
+    const r1 = rv(L, .45, .4, .2);
+    text(fg, 'NEW: ICEFALL  ·  THE SKIMMER  ·  THE FLIER  ·  PITHEAD', W / 2, 672 + r1.dy, { kind: 'ail', size: 36, weight: 700, color: C.muted, track: 8, alpha: r1.a });
+    const r2 = rv(L, .75, .4, .2);
+    text(fg, 'FREE TO PLAY  ·  IN YOUR BROWSER OR ON YOUR DESKTOP', W / 2, 728 + r2.dy, { kind: 'ail', size: 29, weight: 600, color: C.faint, track: 6, alpha: r2.a });
+  } },
+  // Icefall
+  { id: 'i1-icefall', at: hit(66.84), box: true, draw(L) {
+    foot(bg, 'ice-reveal', L.t, L.d, { from: FROM['ice-reveal'], grade: 'contrast(1.05) saturate(1.02)' });
+    mapCard(L, 'NEW', 'ICEFALL', 'BIG TEAM  ·  8V8  ·  420 × 280 M');
+    sub(L, 'A glacial valley under snow. Each side’s base a hangar built into the mountain at its end.', { at: .8 });
+  } },
+  { id: 'i2-ways', at: grid(7), box: true, draw(L) {
+    const c = cutAt(WAYS, L.t, L.d);
+    foot(bg, c.name, c.lt, c.d, { from: c.from, grade: 'contrast(1.06) saturate(1.02)' });
+    kick(c.lt, 14, .3);
+    const a = ramp(c.lt, .05, .15) * (1 - ramp(c.lt, c.d - .1, c.d));
+    const s = lerp(1.15, 1, E.expo(ramp(c.lt, 0, .3)));
+    pool(fg, W / 2, 500, 700, .35 * a);
+    text(fg, c.label, W / 2, 530, { size: 116, track: 12, scale: s, alpha: a, shadow: 30 });
+    const rs = rv(L, .1, .3, .15);
+    text(fg, 'THREE WAYS ACROSS', W / 2, 1035, { kind: 'ail', size: 30, weight: 700, color: C.gold, track: 8, alpha: rs.a });
+  } },
+  // the skimmer: its card, then a boost
+  { id: 'k1-skimmer', at: grid(10), box: true, draw(L) {
+    craftCard(L, 'THE SKIMMER', 'sk-hero', SKIM_LINES, { from: FROM['sk-hero'] });
+  } },
+  { id: 'k2-boost', at: grid(13), box: true, draw(L) {
+    foot(bg, 'sk-boost', L.t, L.d, { from: FROM['sk-boost'], grade: 'contrast(1.06) saturate(1.06)' });
+    low();
+    caption(L, ['BOOST ACROSS THE ICE.'], { y: 820, size: 86, at: .2, track: 6 });
+    sub(L, 'Hold Shift: 27 m/s, guns cold, turning traded for speed.', { at: .9 });
+  } },
+  // the flier: its card on the big hit, then a roll
+  { id: 'f1-flier', at: hit(79.69), box: true, draw(L) {
+    craftCard(L, 'THE FLIER', 'fl-hero', FLY_LINES, { from: FROM['fl-hero'], glow: 'rgba(232,185,49,.14)' });
+  } },
+  { id: 'f2-roll', at: grid(19), box: true, draw(L) {
+    foot(bg, 'fl-roll', L.t, L.d, { from: FROM['fl-roll'], grade: 'contrast(1.06) saturate(1.06)' });
+    low();
+    caption(L, ['TAKE THE HIGH GROUND.', 'ALL OF IT.'], { y: 760, size: 80, at: .2, step: .5, track: 6 });
+  } },
+  // Big Team on Icefall
+  { id: 'b1-bigteam', at: grid(22), box: true, draw(L) {
+    const c = cutAt(BIGTEAM, L.t, L.d);
+    foot(bg, c.name, c.lt, c.d, { from: c.from, grade: 'contrast(1.06) saturate(1.06)' });
+    if (c.k) kick(c.lt, 14, .3);
+    modeCard(L, 'BIG TEAM', 'Capture the Flag, 8v8 on Icefall: two trucks, a skimmer and a flier a side.', { tag: '16 PLAYERS', tagColor: C.blueHi });
+  } },
+  // Pithead
+  { id: 'p1-pithead', at: grid(25), box: true, draw(L) {
+    foot(bg, 'pit-map', L.t, L.d, { from: FROM['pit-map'], grade: 'contrast(1.06) saturate(.96)' });
+    kick(L.t, 12, .35);
+    mapCard(L, 'NEW', 'PITHEAD', 'DUEL  ·  DOUBLES  ·  FREE FOR ALL');
+    sub(L, 'A mine built over its open shaft, in a blizzard. Off any edge is death.', { at: .8 });
+  } },
+  { id: 'p2-shaft', at: grid(29), box: true, draw(L) {
+    const c = cutAt(PIT, L.t, L.d);
+    foot(bg, c.name, c.lt, c.d, { from: c.from, grade: 'contrast(1.07) saturate(1.0)' });
+    low();
+    kick(c.lt, 14, c.k ? .3 : .2);
+    caption(L, ['THE SWORD IN THE COLLAR.', 'THE SNIPER ON THE SHEAVE.'], { y: 760, size: 72, at: .25, step: .6, track: 5 });
+  } },
+  // every map relit: a bed, the slam, the maps on the beat
+  { id: 'l1-relit', at: hit(97.9), box: true, draw(L) {
+    const slam = SLAM - hit(97.9);
+    if (L.t < slam) {
+      foot(bg, 'pit-out', L.t, slam, { from: FROM['pit-out'], grade: 'brightness(.5) contrast(1.06) saturate(.8)' });
+      return;
+    }
+    const lt = L.t - slam;
+    const c = cutAt(RELIT, lt, L.d - slam);
+    foot(bg, c.name, c.lt, c.d, { from: c.from, grade: 'contrast(1.05) saturate(1.04)', z: lerp(1.0, 1.05, c.lt / c.d) });
+    kick(c.lt, 12, c.k ? .25 : .7);
+    const r = rv({ t: lt, d: L.d - slam }, 0, .3, .2);
+    pool(fg, W / 2, 470, 760, .5 * r.a);
+    text(fg, 'EVERY MAP, RELIT.', W / 2, 500 + r.dy, { size: 120, track: 12, scale: lerp(1.25, 1, E.expo(ramp(lt, 0, .4))), alpha: r.a, shadow: 30, glow: 'rgba(232,185,49,.35)', glowR: 60 });
+    const a = ramp(c.lt, .05, .2) * (1 - ramp(c.lt, c.d - .08, c.d));
+    text(fg, c.label, 120, 1035, { kind: 'ail', size: 32, weight: 700, color: C.gold, track: 6, align: 'left', alpha: a });
+    sub({ t: lt, d: L.d - slam }, 'Every map graded as film. Halls lit by their own lamps. A shadow under every fighter.', { at: .7, x: W - 120, align: 'right', size: 28 });
+  } },
+  // the pill boots
+  { id: 'g1-boots', at: hit(104.32), draw(L) {
+    ground(bg, 'rgba(232,185,49,.16)', W / 2, 600, 900);
+    const st = S3.boots; st.key.intensity = 2.6; st.rim.intensity = 2.8; st.hemi.intensity = .55;
+    st.objs.forEach((o, i) => {
+      o.userData.s0 ??= o.scale.x;
+      const p = E.back(ramp(L.t, .1 + i * .12, .5 + i * .12)) * (1 - ramp(L.t, L.d - .15, L.d));
+      o.scale.setScalar(Math.max(.001, p) * o.userData.s0);
+      o.rotation.y = (i ? -.5 : .5) + Math.sin(L.t * 1.2 + i * 1.7) * .45 + L.t * .25;
+    });
+    shoot(st, [0, 200, W, 700], [0, .45, 2.6], [0, .22, 0], 30);
+    caption(L, ['NEW GEAR: THE PILL BOOTS.'], { y: 170, size: 88, at: .05, track: 8, shadow: 0 });
+    sub(L, 'Huge, goofy, and in the pill’s colours. Worn only if your wallet owns them.', { y: 960, at: .9 });
+    sub(L, 'Cosmetic only: never a hitbox, a sound or a step faster.', { y: 1005, at: 1.2, color: C.faint, size: 28 });
+  } },
+  // the end card
+  { id: 'e1-end', at: hit(107.54), draw(L) {
+    foot(bg, clip('fl-roll', 'fl-hero'), L.t, L.d, { full: true, from: .3, speed: .4, grade: 'brightness(.3) contrast(1.05) saturate(.75) blur(4px)' });
+    const r0 = rv(L, .25, .45, .01);
+    wordmark(fg, W / 2, 430 + r0.dy, 1.15, { alpha: r0.a, glow: 'rgba(232,185,49,.35)', line: 'NOW WITH WINGS' });
+    const r2 = rv(L, 1.2, .45, .01);
+    fg.save(); fg.globalAlpha = r2.a; fg.fillStyle = C.line; fg.fillRect(W / 2 - 520, 610, 1040, 2); fg.restore();
+    text(fg, 'PLAY FREE', W / 2, 700 + r2.dy, { size: 72, track: 10, alpha: r2.a, shadow: 20 });
+    text(fg, 'IN YOUR BROWSER  ·  ON WINDOWS, LINUX AND MAC', W / 2, 752 + r2.dy, { kind: 'ail', size: 30, weight: 600, color: C.muted, track: 5, alpha: r2.a });
+    text(fg, 'elopros.com/games/oneshot', W / 2, 840 + r2.dy, { kind: 'ail', size: 48, weight: 700, color: C.goldHi, alpha: r2.a, track: 1 });
+    const r3 = rv(L, 2.2, .5, .01);
+    text(fg, 'ELO PROS', W / 2, 960 + r3.dy * .4, { kind: 'ail', size: 28, weight: 700, color: C.faint, track: 8, alpha: r3.a });
+  } },
+];
+const TOTAL = hit(114.2);
+for (let i = 0; i < SCENES.length; i++) { SCENES[i].t0 = SCENES[i].at; SCENES[i].d = (i + 1 < SCENES.length ? SCENES[i + 1].at : TOTAL) - SCENES[i].at; }
+const at = id => SCENES.find(s => s.id === id).t0;
+// Where in each clip a scene starts (seconds), read off its frames: the
+// shot lists give each a little run-up, and the moment is cut to the beat.
+const FROM = { 'fl-launch': .3, 'sk-lake': .3, 'fl-hero': .2, 'ice-reveal': .2, 'sk-hero': .2, 'sk-boost': .2, 'fl-roll': .2, 'pit-map': .2, 'pit-out': .2 };
+// The fight's two cuts, then the ramp's, each shorter than the last into the drop.
+const FIGHTS = [[0, 'fl-guns', .3], [2.14, 'sk-guns', .3]];
+const RAMP = [[0, 'fl-pov', .3], [1.07, 'sk-pov', .3], [1.87, 'fl-dive', .3], [2.47, 'sk-boost', 1.4], [2.94, 'fl-roll', 1.2], [3.34, 'sk-guns', 1.8], [3.74, 'fl-guns', 2.0]];
+// Icefall's three ways across, a beat each.
+const WAYS = [[0, 'ice-lake', .2, 'THE FROZEN LAKE'], [1.068, 'ice-moraine', .2, 'THE MORAINE'], [2.136, 'ice-col', .2, 'THE COL']];
+// Big Team: a truck, then the craft over it.
+const BIGTEAM = [[0, 'ice-bt', .2], [1.6, 'ice-bt-2', .2]];
+// Pithead's fight: over the shoulder to a head shot, then a walk off the gantry.
+const PIT = [[0, 'pit-fight', .2], [2.136, 'pit-fall', .2]];
+// Every map relit, a beat each after the slam.
+const RELIT = [[0, 'relit-overpass', .1, 'OVERPASS'], [1.068, 'relit-bulkhead', .1, 'BULKHEAD'], [2.136, 'relit-dryfork', .1, 'DRY FORK'],
+  [3.204, 'relit-cistern', .1, 'CISTERN'], [4.272, 'relit-proving', .1, 'PROVING GROUNDS']];
+// The craft's cards: crates/sim/src/consts.rs (SKIM_*, FLY_*, BOOST_MS,
+// BOMB_MS, FLY_CEIL, FLY_ROLL_*) and arms.rs (BOLTS, WING_BOLTS).
+const SKIM_LINES = [
+  ['17 M/S, 27 BOOSTED', 'A hover bike: the nose follows your aim'],
+  ['TWIN BOLT GUNS', 'Fired left and right by turns, as long as you hold'],
+  ['SLIDES', 'It slips more than a truck grips'],
+  ['HALF A TRUCK’S ARMOUR', 'The rider sits up out of it, open from above'],
+];
+const FLY_LINES = [
+  ['19 M/S, 32 BOOSTED', 'Its nose follows your aim, up and down too'],
+  ['WING GUNS AND A BOMB', 'An ion cannon’s round dropped from under its nose'],
+  ['ROLLS ASIDE', 'Jump with a strafe: thrown clear, then a rest'],
+  ['CLIMBS 60 M', 'Over where it spawns. Let go, and it hangs there'],
+];
+const FLASHES = [
+  [OPEN, .35, '#fff', .45],
+  [DROP, .5, '#fff', .9],
+  [hit(79.69), .3, '#ffe9c0', .4],
+  [SLAM, .5, '#fff', .8],
+  [at('e1-end'), .5, '#fff', .45],
+];
+
+// ── the audio cue list mix.py lays down, in trailer seconds ───────────────
+// A shot's own sound (the game's mix, clipsnd/<clip>.wav, written by the
+// film beside its frames) is laid under its scene as a music row, from the
+// same second of the clip the picture starts at.
+const game = (name, t0, len, from = 0, gain = .7) => ({ src: `clipsnd/${name}.wav`, at: t0, in: from, len, gain, fade_in: .04, fade_out: .12 });
+const ramp0 = at('c5-ramp');
+const CUES = {
+  total: TOTAL,
+  music: [
+    { src: 'music/intro.ogg', at: 0, in: MUSIC_IN, len: TOTAL + .1, gain: 1.0, fade_in: .8, fade_out: 2.6 },
+    { src: 'sfx/trailer_drone.wav', at: 0, in: 0, len: SKIM, gain: .3, fade_in: 1.0, fade_out: .5 },
+    game('ice-open', 0, OPEN, FROM['ice-open'] || 0, .5),
+    game('fl-launch', OPEN, SKIM - OPEN, FROM['fl-launch'], .75),
+    game('sk-lake', SKIM, FIGHT - SKIM, FROM['sk-lake'], .75),
+    ...FIGHTS.map(([t, name, from], i) => game(name, FIGHT + t, (FIGHTS[i + 1] ? FIGHTS[i + 1][0] : BUILD - FIGHT) - t, from, .8)),
+    ...RAMP.map(([t, name, from], i) => game(name, ramp0 + t, (RAMP[i + 1] ? RAMP[i + 1][0] : DROP - ramp0) - t, from, .8)),
+    game('ice-reveal', at('i1-icefall'), at('i2-ways') - at('i1-icefall'), FROM['ice-reveal'], .4),
+    game('sk-boost', at('k2-boost'), at('f1-flier') - at('k2-boost'), FROM['sk-boost'], .75),
+    game('fl-roll', at('f2-roll'), at('b1-bigteam') - at('f2-roll'), FROM['fl-roll'], .75),
+    ...BIGTEAM.map(([t, name, from], i) => game(name, at('b1-bigteam') + t, (BIGTEAM[i + 1] ? BIGTEAM[i + 1][0] : at('p1-pithead') - at('b1-bigteam')) - t, from, .65)),
+    game('pit-map', at('p1-pithead'), at('p2-shaft') - at('p1-pithead'), FROM['pit-map'], .5),
+    ...PIT.map(([t, name, from], i) => game(name, at('p2-shaft') + t, (PIT[i + 1] ? PIT[i + 1][0] : at('l1-relit') - at('p2-shaft')) - t, from, .7)),
+  ],
+  sfx: [
+    // the cold open: the wind over the valley, the flier's pass on the kick
+    { src: 'snd/wind_0.ogg', at: .2, gain: .6 },
+    { src: 'snd/wind_0.ogg', at: 2.4, gain: .4 },
+    { src: 'sfx/trailer_riser.wav', at: OPEN - 4.0, gain: .3 },
+    { src: 'sfx/trailer_whoosh.wav', at: OPEN - .4, gain: .55 },
+    { src: 'sfx/trailer_boom.wav', at: OPEN, gain: .6 },
+    { src: 'snd/flyby_0.ogg', at: OPEN + .15, gain: .7 },
+    { src: 'sfx/trailer_whoosh.wav', at: SKIM - .3, gain: .4 },
+    { src: 'sfx/trailer_pulse.wav', at: SKIM, gain: .6 },
+    { src: 'snd/flyby_1.ogg', at: SKIM + .4, gain: .6 },
+    ...FIGHTS.map(([t]) => ({ src: 'sfx/trailer_pulse.wav', at: FIGHT + t, gain: .55 })),
+    { src: 'sfx/trailer_riser.wav', at: DROP - 6.0, gain: .55 },
+    // the ramp: a hit on every cut
+    ...RAMP.map(([t]) => ({ src: 'sfx/trailer_pulse.wav', at: ramp0 + t, gain: .6 })),
+    ...RAMP.map(([t], i) => ({ src: `snd/flyby_${i % 3}.ogg`, at: ramp0 + t + .05, gain: .45 })),
+    // the drop
+    { src: 'sfx/trailer_boom.wav', at: DROP, gain: 1.0 },
+    { src: 'sfx/trailer_braam.wav', at: DROP + .02, gain: .55 },
+    { src: 'snd/flyby_2.ogg', at: DROP + .1, gain: .5 },
+    // Icefall
+    { src: 'sfx/trailer_whoosh.wav', at: at('i1-icefall') - .25, gain: .35 },
+    { src: 'snd/wind_0.ogg', at: at('i1-icefall') + .1, gain: .4 },
+    ...WAYS.map(([t]) => ({ src: 'sfx/trailer_pulse.wav', at: at('i2-ways') + t, gain: .6 })),
+    // the skimmer
+    { src: 'sfx/trailer_whoosh.wav', at: at('k1-skimmer') - .2, gain: .3 },
+    { src: 'snd/ride_0.ogg', at: at('k1-skimmer') + .15, gain: .7 },
+    ...SKIM_LINES.map((_, i) => ({ src: 'snd/ui_click_0.ogg', at: at('k1-skimmer') + .4 + i * .3, gain: .35 })),
+    { src: 'snd/flyby_0.ogg', at: at('k2-boost') + .2, gain: .5 },
+    // the flier, on the big hit
+    { src: 'sfx/trailer_boom.wav', at: at('f1-flier'), gain: .7 },
+    { src: 'snd/ride_1.ogg', at: at('f1-flier') + .15, gain: .7 },
+    ...FLY_LINES.map((_, i) => ({ src: 'snd/ui_click_0.ogg', at: at('f1-flier') + .4 + i * .3, gain: .35 })),
+    { src: 'sfx/trailer_whoosh.wav', at: at('f2-roll') + .6, gain: .45 },
+    // Big Team, Pithead
+    { src: 'sfx/trailer_pulse.wav', at: at('b1-bigteam'), gain: .6 },
+    { src: 'snd/shot_minigun_0.ogg', at: at('b1-bigteam') + 1.0, gain: .45 },
+    { src: 'sfx/trailer_pulse.wav', at: at('p1-pithead'), gain: .6 },
+    { src: 'snd/wind_0.ogg', at: at('p1-pithead') + .1, gain: .6 },
+    { src: 'sfx/trailer_pulse.wav', at: at('p2-shaft') + PIT[1][0], gain: .55 },
+    // relit
+    { src: 'sfx/trailer_riser.wav', at: SLAM - 3.0, gain: .45 },
+    { src: 'sfx/trailer_boom.wav', at: SLAM, gain: 1.0 },
+    { src: 'sfx/trailer_braam.wav', at: SLAM + .02, gain: .6 },
+    ...RELIT.slice(1).map(([t]) => ({ src: 'sfx/trailer_pulse.wav', at: SLAM + t, gain: .5 })),
+    // the boots, the end
+    { src: 'sfx/trailer_whoosh.wav', at: at('g1-boots') - .2, gain: .3 },
+    { src: 'snd/pickup_0.ogg', at: at('g1-boots') + .2, gain: .5 },
+    { src: 'snd/land_0.ogg', at: at('g1-boots') + .45, gain: .6 },
+    { src: 'snd/land_1.ogg', at: at('g1-boots') + .6, gain: .6 },
+    { src: 'sfx/trailer_reverse.wav', at: at('e1-end') - 2.4, gain: .6 },
+    { src: 'sfx/trailer_boom.wav', at: at('e1-end') + .05, gain: .7 },
+    { src: 'sfx/trailer_braam.wav', at: at('e1-end') + .05, gain: .45 },
+    { src: 'voice/game_over_you_win.ogg', at: at('e1-end') + 1.0, gain: .8 },
+  ],
+};
+
+function sceneAt(t) { for (const s of SCENES) if (t < s.t0 + s.d) return s; return SCENES[SCENES.length - 1]; }
+function reset() {
+  // A whole reset, not a setTransform: a clip or shadow left set by one frame
+  // would let clearRect miss and the grain pile up frame on frame.
+  bg.reset(); fg.reset();
+  bg.clearRect(0, 0, W, H); fg.clearRect(0, 0, W, H); bg.fillStyle = '#000'; bg.fillRect(0, 0, W, H);
+  renderer.setScissorTest(false); renderer.setViewport(0, 0, W, H); renderer.clear(true, true, true);
+}
+function frame(g) {
+  const sc = sceneAt(g);
+  reset();
+  sc.draw({ t: g - sc.t0, d: sc.d, g });
+  if (sc.box) { bg.fillStyle = '#000'; bg.fillRect(0, 0, W, BOX.y); bg.fillRect(0, BOX.y + BOX.h, W, H - BOX.y - BOX.h); }
+  post(g);
+  return sc.id;
+}
+
+// ── still compositions: the video's poster ────────────────────────────────
+// Drawn on demand (render.mjs art): the frame a player shows until play.
+const ART = {
+  poster(ctx) {
+    foot(bg, clip('fl-hero', 'fl-roll'), 0, 1, { from: 1.2, full: true, grade: 'brightness(.8) contrast(1.08) saturate(.98)' });
+    shade(bg, H * .45, H, 0, .72);
+    wordmark(fg, W / 2, 700, 1.3, { glow: 'rgba(232,185,49,.35)', line: 'NOW WITH WINGS' });
+    text(fg, 'NEW: ICEFALL  ·  THE SKIMMER  ·  THE FLIER  ·  PITHEAD', W / 2, 900, { kind: 'ail', size: 34, weight: 700, color: C.muted, track: 6 });
+  },
+};
+
+window.art = name => { if (!ART[name]) return false; reset(); ART[name](fg); post(10); return new Promise(res => requestAnimationFrame(() => res(true))); };
+
+window.TRAILER = { FPS, TOTAL, CUES, SCENES: SCENES.map(s => ({ id: s.id, t0: s.t0, d: s.d })) };
+window.seek = t => new Promise(res => { const id = frame(t); requestAnimationFrame(() => res(id)); });
+
+(async () => {
+  const jobs = [];
+  for (const [k, f] of Object.entries(STILLS)) jobs.push(loadImg(`img/${f}.jpg`).then(i => IMG[k] = i, () => {}));
+  const index = await fetch('clips/index.json').then(r => r.json(), () => ({}));
+  for (const [name, n] of Object.entries(index)) {
+    CLIPS[name] = new Array(n);
+    for (let i = 0; i < n; i++) jobs.push(loadImg(`clips/${name}/${String(i + 1).padStart(3, '0')}.jpg`).then(im => CLIPS[name][i] = im, () => {}));
+  }
+  jobs.push(build3D());
+  await Promise.all(jobs);
+  for (const f of ['400 100px Unit', '400 100px Ail', '600 100px Ail', '700 100px Ail']) await document.fonts.load(f);
+  makeGrain();
+  for (const s of SCENES) frame(s.t0 + .5);   // warm every stage once so no captured frame is a compile
+  window.READY = true;
+  if (Q.has('play')) {
+    const t0 = performance.now();
+    const tick = () => { const g = ((performance.now() - t0) / 1000) % TOTAL; frame(g); requestAnimationFrame(tick); };
+    tick();
+  } else if (Q.has('t')) frame(+Q.get('t'));
+  else if (Q.has('art')) window.art(Q.get('art'));
+})().catch(e => { console.log('ERR', e.stack || e.message); window.FAILED = String(e); });
+</script>
+</body></html>

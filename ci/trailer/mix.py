@@ -3,7 +3,8 @@
     python3 mix.py BUILD_DIR cues.json mix.wav
 
 Music rows: src, at, in, len, gain, fade_in, fade_out. Sfx rows: src, at, gain.
-Sources are relative to BUILD_DIR. 48 kHz stereo; loudness is set at mux time.
+Sources are relative to BUILD_DIR; one that is not there (a shot's own sound
+not filmed yet) is skipped and named. 48 kHz stereo; loudness is set at mux time.
 """
 import json
 import subprocess
@@ -34,7 +35,14 @@ def main(base, cues_path, out):
     base = Path(base)
     cues = json.load(open(cues_path))["CUES"]
     bus = np.zeros((int((cues["total"] + 0.5) * SR), 2), dtype=np.float32)
-    for m in cues["music"]:
+
+    def there(row):
+        if (base / row["src"]).exists():
+            return True
+        print(f"mix: no {row['src']} (skipped)")
+        return False
+
+    for m in filter(there, cues["music"]):
         a = decode(base / m["src"])
         seg = a[int(m["in"] * SR):int((m["in"] + m["len"]) * SR)].copy()
         env = np.ones(len(seg), dtype=np.float32)
@@ -44,7 +52,7 @@ def main(base, cues_path, out):
         if fo:
             env[-fo:] *= np.linspace(1, 0, fo) ** 2
         place(bus, seg * env[:, None] * m["gain"], m["at"])
-    for s in cues["sfx"]:
+    for s in filter(there, cues["sfx"]):
         place(bus, decode(base / s["src"]) * s["gain"], s["at"])
     peak = float(np.abs(bus).max())
     if peak > 0.98:

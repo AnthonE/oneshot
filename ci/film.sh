@@ -26,7 +26,9 @@
 #
 # FILM_SERVER_ARGS adds to the server's flags for a record: the trailer's
 # sword fights are `FILM_SERVER_ARGS='--loadout sword,br'`, everyone spawning
-# with the sword.
+# with the sword. FILM_CLIENT_ARGS adds to the recorder's: the craft's tapes
+# are `FILM_CLIENT_ARGS='--pilot flier'` (or skimmer), the autopilot boarding
+# the nearest free one and flying it (Big Team on Icefall, map 9).
 #
 # A tape runs from the join, and the level takes a minute to build on
 # lavapipe: ask for the load plus the play you want (170 s for a minute
@@ -118,7 +120,12 @@ record)
   done
   [ -n "$url" ] || { cat "$tmp/server.err" >&2; fail "the server never said where to play"; }
   echo "film: taping $secs s of mode $mode on map $map"
-  run "$tape.log" --server "$url" --mode "$mode" --autoplay --lite --record "$tape" "$secs" \
+  # The recorder draws small: a tape is the server's bytes, never its
+  # pixels, and on lavapipe a full window draws too slowly for its inputs
+  # to reach the server in time (past room::LOST_HOLD_MS the stick eases
+  # to still, and the autopilot crawls at a third of its speed).
+  export WINIT_X11_SCALE_FACTOR=${FILM_RECORD_SCALE:-0.4}
+  run "$tape.log" --server "$url" --mode "$mode" --autoplay --lite ${FILM_CLIENT_ARGS:-} --record "$tape" "$secs" \
     || fail "the recorder exited non-zero (its log: $tape.log)"
   [ -s "$tape" ] || fail "no tape at $tape"
   ;;
