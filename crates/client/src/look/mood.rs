@@ -542,6 +542,7 @@ pub const FROST: Mood = Mood {
         tint: 0.004,
         saturation: 0.96,
         contrast: 1.0,
+        pivot: DAY_PIVOT,
         lift: 0.0,
     },
     snow: true,
