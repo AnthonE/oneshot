@@ -75,6 +75,10 @@ pub const DRAW_M: f32 = 46.0;
 /// has taken it to its own grey (luma ~0.108): Gates' golden straw. A green
 /// one's photograph keeps its colour, times this and the meadow's patches.
 const STRAW: [f32; 3] = [3.1, 2.3, 1.0];
+/// A snowed valley's (`cold`): what stands through snow is last year's,
+/// dun and no brighter than a snag's bark. Golden on white read orange,
+/// the most saturated thing in the frame.
+const STRAW_COLD: [f32; 3] = [1.75, 1.5, 1.05];
 const GREEN: [f32; 3] = [0.95, 1.0, 0.85];
 /// How far a grass block's corner is from its centre: what `cull` reaches
 /// past the cover's distance.
@@ -284,16 +288,212 @@ const DUNE_ABOVE_SEA_M: f32 = 1.3;
 /// dunes read as grown over in places and bare between.
 const ISLE_DRY: (f32, f32) = (0.03, 0.3);
 const ISLE_DRIFT: (f32, f32) = (0.45, 0.72);
+/// A snowed valley's (`cold`): next to none on clean snow, and stands of
+/// them where its snow lies thin ([`snow_thin`]: the ground's colour in
+/// `ground.wgsl`, its stones in `clutter.rs` and these tufts all read it),
+/// so tufts and stones stand on ground that shows and are not two scatters
+/// on clean snow.
+const COLD_DRY: (f32, f32) = (0.006, 0.45);
+/// A pressure ridge: ground under this much over the ice with the sheet
+/// this far to both sides of it.
+const RIDGE_UNDER_M: f32 = 2.2;
+const RUBBLE_OVER_ICE_M: f32 = 0.15;
+const RIDGE_ACROSS_M: f32 = 7.0;
+const RIDGE_LOW_M: f32 = 8.0;
+const SNOW_GATHER: (f32, f32) = (0.5, 0.68);
+/// Where a valley's snow lies thin. On what stands proud of the ground
+/// `THIN_REACH_M` round it (a crown, a shoulder, a spur's crest: from
+/// `THIN_PROUD_M.0` m proud to whole at `.1`); less on a flank (a slope
+/// from `THIN_SLOPE.0` to `.1`, `THIN_FLANK` of it); and up from the ice
+/// (from `THIN_OVER_ICE_M.0` over it, whole there, to none `.1` higher,
+/// where the sheet is within `THIN_SHORE_M`): a shore and an islet are
+/// ground and stones, the wind's doing. In patches (`THIN_PATCH` of it
+/// anywhere, all of it where the gather noise runs high; a shore in
+/// reaches, `SHORE_FLOOR` of it between them, by a broader noise cut at
+/// `SHORE_REACH`); a lane's floor and a forecourt lie flat and low and
+/// stay clean, and so does the snow against a face (ground standing or
+/// falling steeper than rock holds within `FACE_CLEAR_M`: `FACE_THIN` of
+/// it there), where a cap meets its lip and a bank lies at a foot; and so
+/// does high ground (from `THIN_HIGH_M.0` over the ice, none of it thin by
+/// `.1`): a moraine's crowns and a shore are scoured, a massif's cap is not.
+const THIN_REACH_M: f32 = 10.0;
+const THIN_PROUD_M: (f32, f32) = (0.6, 2.2);
+const THIN_SLOPE: (f32, f32) = (0.18, 0.4);
+const THIN_FLANK: f32 = 0.6;
+const THIN_OVER_ICE_M: (f32, f32) = (0.05, 2.6);
+const THIN_SHORE_M: f32 = 12.0;
+const THIN_PATCH: f32 = 0.45;
+const THIN_HIGH_M: (f32, f32) = (9.0, 15.0);
+const SHORE_REACH: (f32, f32) = (0.4, 0.6);
+const SHORE_FLOOR: f32 = 0.2;
+const FACE_CLEAR_M: f32 = 5.0;
+const FACE_THIN: f32 = 0.25;
+
+/// How much of a snowed valley's ground shows through at (x, z), 0..1: the
+/// meadow's patch noise read elsewhere and broader. Its tufts and its
+/// stones (`clutter.rs`) both gather by it.
+pub(crate) fn snow_gather(x: f32, z: f32) -> f32 {
+    let n = patch(x * 0.45 - 53.0, z * 0.45 + 29.0);
+    ((n - SNOW_GATHER.0) / (SNOW_GATHER.1 - SNOW_GATHER.0)).clamp(0.0, 1.0)
+}
+
+/// How thin a snowed valley's snow lies at (x, z), 0..1, over ice at `ice`.
+pub(crate) fn snow_thin(t: &TerrainDef, x: f32, z: f32, ice: f32) -> f32 {
+    let Some(y) = ground(t, x, z) else { return 0.0 };
+    if y < ice + THIN_OVER_ICE_M.0 {
+        return 0.0;
+    }
+    let step = |a: f32, b: f32, v: f32| {
+        let k = ((v - a) / (b - a)).clamp(0.0, 1.0);
+        k * k * (3.0 - 2.0 * k)
+    };
+    let at = |dx: f32, dz: f32| ground(t, x + dx, z + dz).unwrap_or(y);
+    let slope = ((at(1.0, 0.0) - at(-1.0, 0.0)) * 0.5).hypot((at(0.0, 1.0) - at(0.0, -1.0)) * 0.5);
+    // Rock's, not snow's (`level::SNOW_ROCK_SLOPE`).
+    if slope > 1.1 {
+        return 0.0;
+    }
+    let d = core::f32::consts::FRAC_1_SQRT_2;
+    let ring = [
+        (1.0, 0.0),
+        (-1.0, 0.0),
+        (0.0, 1.0),
+        (0.0, -1.0),
+        (d, d),
+        (-d, d),
+        (d, -d),
+        (-d, -d),
+    ];
+    let round = ring
+        .iter()
+        .map(|(a, b)| at(a * THIN_REACH_M, b * THIN_REACH_M))
+        .sum::<f32>()
+        / 8.0;
+    let proud = step(THIN_PROUD_M.0, THIN_PROUD_M.1, y - round);
+    let flank = THIN_FLANK * step(THIN_SLOPE.0, THIN_SLOPE.1, slope);
+    let by_ice = ring.iter().any(|(a, b)| {
+        at(a * THIN_SHORE_M, b * THIN_SHORE_M) < ice + THIN_OVER_ICE_M.0
+            || at(a * THIN_SHORE_M * 0.5, b * THIN_SHORE_M * 0.5) < ice + THIN_OVER_ICE_M.0
+    });
+    let shore = if by_ice {
+        1.0 - step(0.0, THIN_OVER_ICE_M.1, y - ice - THIN_OVER_ICE_M.0)
+    } else {
+        0.0
+    };
+    let patch = THIN_PATCH + (1.0 - THIN_PATCH) * snow_gather(x, z);
+    // A shore is thin in reaches, bare of it between: no hem round the ice.
+    let reach = step(SHORE_REACH.0, SHORE_REACH.1, self::patch(x * 0.3 + 11.0, z * 0.3 - 7.0));
+    // Against a face the snow lies deep: its cap to the lip, a bank at its foot.
+    let face = ring
+        .iter()
+        .any(|(a, b)| (at(a * FACE_CLEAR_M, b * FACE_CLEAR_M) - y).abs() > FACE_CLEAR_M * 1.1);
+    // High ground keeps its cap: a massif's top and a spur's crest are
+    // white to their lips, as a mountain's are.
+    let high = 1.0 - step(THIN_HIGH_M.0, THIN_HIGH_M.1, y - ice);
+    let open = high * if face { FACE_THIN } else { 1.0 };
+    (proud.max(flank) * patch * open).max(shore * (SHORE_FLOOR + (1.0 - SHORE_FLOOR) * reach))
+}
+
+/// How proud a valley's ground stands of the ground `THIN_REACH_M` round
+/// it at (x, z), -1 (a hollow, `CROWN_M` under it) to 1 (a crown, as far
+/// over): the snow's tone reads it (`ground.wgsl`), so a rise has a shape
+/// where no sun falls on it.
+const CROWN_M: f32 = 2.4;
+
+pub(crate) fn snow_crown(t: &TerrainDef, x: f32, z: f32) -> f32 {
+    let Some(y) = ground(t, x, z) else { return 0.0 };
+    let d = core::f32::consts::FRAC_1_SQRT_2 * THIN_REACH_M;
+    let r = THIN_REACH_M;
+    let round = [
+        (r, 0.0),
+        (-r, 0.0),
+        (0.0, r),
+        (0.0, -r),
+        (d, d),
+        (-d, d),
+        (d, -d),
+        (-d, -d),
+    ]
+    .iter()
+    .map(|(a, b)| ground(t, x + a, z + b).unwrap_or(y))
+    .sum::<f32>()
+        / 8.0;
+    ((y - round) / CROWN_M).clamp(-1.0, 1.0)
+}
+
+/// Whether (x, z) is on a pressure ridge: low ground with the sheet (at
+/// `ice`) close on both sides of it. Broken ice, not ground: it grows
+/// nothing and is painted as ice to its crest (`ground.wgsl`).
+pub(crate) fn ice_ridge(t: &TerrainDef, x: f32, z: f32, ice: f32) -> bool {
+    let Some(y) = ground(t, x, z) else { return false };
+    let ice_at = |dx: f32, dz: f32| ground(t, x + dx, z + dz).is_some_and(|h| h < ice + THIN_OVER_ICE_M.0);
+    let r = RIDGE_ACROSS_M;
+    // A ridge is low all along: an islet's flank has higher ground within reach.
+    let d = core::f32::consts::FRAC_1_SQRT_2 * RIDGE_LOW_M;
+    let low = [
+        (RIDGE_LOW_M, 0.0),
+        (-RIDGE_LOW_M, 0.0),
+        (0.0, RIDGE_LOW_M),
+        (0.0, -RIDGE_LOW_M),
+        (d, d),
+        (-d, d),
+        (d, -d),
+        (-d, -d),
+    ]
+    .iter()
+    .all(|(a, b)| ground(t, x + a, z + b).is_none_or(|h| h < ice + RIDGE_UNDER_M));
+    low && y >= ice + THIN_OVER_ICE_M.0
+        && y < ice + RIDGE_UNDER_M
+        && ((ice_at(r, 0.0) && ice_at(-r, 0.0))
+            || (ice_at(0.0, r) && ice_at(0.0, -r))
+            || (ice_at(r, r) && ice_at(-r, -r))
+            || (ice_at(r, -r) && ice_at(-r, r)))
+}
+
+/// How much of the ground shows through a valley's snow at (x, z), 0..1:
+/// where [`snow_thin`] passes from `OPEN.0` to `.1`, as the ground's paint
+/// opens its windows (`ground.wgsl`'s scour, a noise against the same
+/// lane), so cover stands on ground that shows and not on clean snow.
+const OPEN: (f32, f32) = (0.45, 0.85);
+
+pub(crate) fn snow_open(t: &TerrainDef, x: f32, z: f32, ice: f32) -> f32 {
+    let k = ((snow_thin(t, x, z, ice) - OPEN.0) / (OPEN.1 - OPEN.0)).clamp(0.0, 1.0);
+    k * k * (3.0 - 2.0 * k)
+}
+
+/// How much of a window's stones lie at (x, z), 0..1: from further out
+/// than its bare ground (`STREWN`, as the paint strews its own:
+/// `ground.wgsl`'s `SCOUR_RIM`), on snow, so where a painted stone goes at
+/// the feet a real one stands.
+const STREWN: (f32, f32) = (0.15, 0.45);
+
+pub(crate) fn snow_strewn(t: &TerrainDef, x: f32, z: f32, ice: f32) -> f32 {
+    let k = ((snow_thin(t, x, z, ice) - STREWN.0) / (STREWN.1 - STREWN.0)).clamp(0.0, 1.0);
+    k * k * (3.0 - 2.0 * k)
+}
 
 /// How much grass grows at (x, z): (green, dry), each 0..1. The splat's own
 /// rule (level.rs): grass up the hills, none on steep rock or in the creek,
 /// in patches; dry tufts alone under the floor, above the sea at `sea`. An
-/// island (`isle`) grows dry tufts alone, in drifts ([`ISLE_DRY`]).
-fn growth(t: &TerrainDef, x: f32, z: f32, sea: f32, isle: bool) -> Option<(f32, f32)> {
+/// island (`isle`) grows dry tufts alone, in drifts ([`ISLE_DRY`]); a snowed
+/// valley (`cold`, with `isle`) where its ground shows ([`COLD_DRY`]).
+fn growth(t: &TerrainDef, x: f32, z: f32, sea: f32, isle: bool, cold: bool) -> Option<(f32, f32)> {
     let y = ground(t, x, z)?;
     let dx = ground(t, x + 0.5, z)? - ground(t, x - 0.5, z)?;
     let dz = ground(t, x, z + 0.5)? - ground(t, x, z - 0.5)?;
     let slope = (dx * dx + dz * dz).sqrt();
+    if cold {
+        // Down to the ice's edge (no swash to keep clear of), none on the sheet.
+        // None in the first hand over the sheet: that is its rubble, not ground.
+        if slope > 0.55 || y < sea + RUBBLE_OVER_ICE_M {
+            return None;
+        }
+        // None on a ridge of the ice's own: broken ice grows nothing.
+        if ice_ridge(t, x, z, sea) {
+            return None;
+        }
+        return Some((0.0, COLD_DRY.0 + (COLD_DRY.1 - COLD_DRY.0) * snow_open(t, x, z, sea)));
+    }
     if slope > 0.55 || y < sea + DUNE_ABOVE_SEA_M {
         return None;
     }
@@ -412,7 +612,8 @@ impl Soup {
 /// The blocks of grass for a map's terrain: a mesh per block and density
 /// layer, its centre and its layer. Nothing grows where `clear` says, nor
 /// down by the sea at `sea` (`NEG_INFINITY`: none); an island (`isle`)
-/// grows dry tufts alone.
+/// grows dry tufts alone, a snowed valley (`cold`) its own dun ones.
+#[allow(clippy::too_many_arguments)]
 pub fn blocks(
     t: &TerrainDef,
     lo: (f32, f32),
@@ -421,6 +622,7 @@ pub fn blocks(
     clear: &Clear,
     sea: f32,
     isle: bool,
+    cold: bool,
 ) -> Vec<(Mesh, Vec2, u8)> {
     let mut out = Vec::new();
     let mut bz = lo.1;
@@ -437,7 +639,7 @@ pub fn blocks(
                     if x > hi.0 || z > hi.1 || clear.blocked(Vec2::new(x, z)) {
                         continue;
                     }
-                    let Some((green, dry)) = growth(t, x, z, sea, isle) else {
+                    let Some((green, dry)) = growth(t, x, z, sea, isle, cold) else {
                         continue;
                     };
                     let r = hash01(cell, 3);
@@ -445,7 +647,7 @@ pub fn blocks(
                         let p = patch_tint(x, z);
                         ([GREEN[0] * p[0], GREEN[1] * p[1], GREEN[2] * p[2]], 1.0, 0.0)
                     } else if r < green * 0.9 + dry {
-                        (STRAW, 0.8, 1.0)
+                        (if cold { STRAW_COLD } else { STRAW }, 0.8, 1.0)
                     } else {
                         continue;
                     };
@@ -603,8 +805,9 @@ mod tests {
             &Clear::default(),
             f32::NEG_INFINITY,
             false,
+            false,
         );
-        let cleared = blocks(&t, (-8.0, -8.0), (8.0, 8.0), 7, &c, f32::NEG_INFINITY, false);
+        let cleared = blocks(&t, (-8.0, -8.0), (8.0, 8.0), 7, &c, f32::NEG_INFINITY, false, false);
         let near = |b: &[(Mesh, Vec2, u8)]| {
             b.iter()
                 .flat_map(|(m, ..)| {

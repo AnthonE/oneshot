@@ -60,6 +60,7 @@ pub mod shield;
 pub mod ship;
 pub mod shot;
 pub mod sky;
+pub mod snow_stone;
 pub mod stars;
 pub mod textures;
 pub mod thumbs;

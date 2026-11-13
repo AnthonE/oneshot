@@ -118,6 +118,12 @@ pub const TINT: [f32; 3] = [0.74, 0.62, 0.52];
 /// An island's paint over Meshy's (linear): cooler and darker than it came,
 /// its orange pits brought back into the sand's family.
 pub const ISLE_TINT: [f32; 3] = [0.8, 0.8, 0.84];
+/// A snowed valley's paint over the island's blocks (`level::Land::Alpine`):
+/// their orange taken out to a dark neutral grey, granite out of the snow,
+/// so a boulder reads as cover against white from across a lane. Dark
+/// enough to stay so under the sky's blue fill in a wall's shade, where a
+/// paler, bluer one was the snow's own hue and read as a pillow.
+pub const COLD_TINT: [f32; 3] = [0.17, 0.235, 0.39];
 /// Stone the sea washes: darker and glossier.
 pub const WET_TINT: [f32; 3] = [0.4, 0.35, 0.31];
 pub const WET_ROUGH: f32 = 0.45;
@@ -138,6 +144,8 @@ pub struct Boulder {
     pub key: u32,
     /// An island's: one of its own blocks.
     pub pale: bool,
+    /// Under snow (a valley's): those blocks in cold stone ([`COLD_TINT`]).
+    pub cold: bool,
 }
 
 /// A base's buttress waiting for its pylon: a turned box the sim collides
@@ -489,6 +497,7 @@ pub struct Stones {
     dry: Vec<Handle<StandardMaterial>>,
     wet: Vec<Handle<StandardMaterial>>,
     pale: Vec<Handle<StandardMaterial>>,
+    cold: Vec<Handle<super::snow_stone::SnowStoneMaterial>>,
     /// An island's scenery (`isle_stone.rs`): `pale` going into shade under
     /// its rim and lost in its cloud.
     hung: Vec<Handle<super::isle_stone::IsleStoneMaterial>>,
@@ -526,6 +535,7 @@ impl Stones {
         meshes: &Assets<Mesh>,
         mats: &mut Assets<StandardMaterial>,
         hung: &mut Assets<super::isle_stone::IsleStoneMaterial>,
+        capped: &mut Assets<super::snow_stone::SnowStoneMaterial>,
         far: Vec3,
     ) -> Option<bool> {
         if self.failed {
@@ -589,11 +599,19 @@ impl Stones {
             } else {
                 tinted(ISLE_TINT, DRY_ROUGH)
             };
+            let cold = if i == PYLON_MODEL || prop || wreck {
+                dry.clone()
+            } else {
+                tinted(COLD_TINT, DRY_ROUGH)
+            };
             self.dry.push(mats.add(dry));
             self.wet.push(mats.add(wet));
             self.hung
                 .push(hung.add(super::isle_stone::material(pale.clone(), ISLE_SEA_Y, far)));
             self.pale.push(mats.add(pale));
+            // Snow lies on a rock's crown; a made thing is snowed by the level's own paint.
+            self.cold
+                .push(capped.add(super::snow_stone::material(cold, !(i == PYLON_MODEL || prop || wreck))));
         }
         Some(true)
     }
@@ -610,6 +628,7 @@ pub fn dress(
     meshes: Res<Assets<Mesh>>,
     mut mats: ResMut<Assets<StandardMaterial>>,
     mut hung: ResMut<Assets<super::isle_stone::IsleStoneMaterial>>,
+    mut capped: ResMut<Assets<super::snow_stone::SnowStoneMaterial>>,
     tier: Res<super::quality::Tier>,
     boulders: Query<(Entity, &Boulder)>,
     pylons: Query<(Entity, &Pylon)>,
@@ -626,7 +645,7 @@ pub fn dress(
         .color
         .to_linear();
     let far = Vec3::new(far.red, far.green, far.blue);
-    let Some(ok) = stones.ready(&server, &meshes, &mut mats, &mut hung, far) else {
+    let Some(ok) = stones.ready(&server, &meshes, &mut mats, &mut hung, &mut capped, far) else {
         return;
     };
     for (e, b) in &boulders {
@@ -647,11 +666,17 @@ pub fn dress(
         )>()
         .insert((
             Mesh3d(stones.meshes[model].clone()),
-            MeshMaterial3d(if b.pale { &stones.pale } else { &stones.dry }[model].clone()),
             block_transform(b.min, b.max, quarters),
             Bare(b.min, b.max),
             Dressed,
         ));
+        if b.cold {
+            ec.insert(MeshMaterial3d(stones.cold[model].clone()));
+        } else {
+            ec.insert(MeshMaterial3d(
+                if b.pale { &stones.pale } else { &stones.dry }[model].clone(),
+            ));
+        }
     }
     for (e, p) in &pylons {
         let mut ec = commands.entity(e);

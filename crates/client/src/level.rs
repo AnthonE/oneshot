@@ -567,11 +567,21 @@ pub fn dress_level(
             .remove::<MeshMaterial3d<StandardMaterial>>()
             .insert((MeshMaterial3d(m), Dressed));
     }
+    // A snowed valley's concrete is cold (`ALPINE_CONCRETE`).
+    let alpine = sim::maps::ALL
+        .iter()
+        .find(|d| d.id == mood.map)
+        .is_some_and(|d| Land::of(d) == Land::Alpine);
     for (e, look, block) in boxes.iter() {
-        let (Some(base), Some((set, _, _))) = (box_material(look.0), dress(look.0)) else {
+        let (Some(mut base), Some((set, _, _))) = (box_material(look.0), dress(look.0)) else {
             commands.entity(e).insert(Dressed);
             continue;
         };
+        if alpine && matches!(look.0, BLAST | BLAST_DARK) {
+            let c = base.base_color.to_linear();
+            let k = ALPINE_CONCRETE;
+            base.base_color = Color::linear_rgb(c.red * k[0], c.green * k[1], c.blue * k[2]);
+        }
         let Some((albedo, normal)) = tex.set(set) else {
             continue;
         };
@@ -610,7 +620,7 @@ pub fn dress_level(
         // Snow takes no grime or seams, nor a soaked road dust.
         match block.filter(|_| look.0 != SNOW && !(look.0 == ROAD && wet > 0.0)) {
             Some(b) => {
-                let w = weathering::material(m, surface(look.0), b, dusty, mood.roofed);
+                let w = weathering::material(m, surface(look.0), b, dusty, mood.roofed, alpine);
                 ec.remove::<MeshMaterial3d<StandardMaterial>>()
                     .insert(MeshMaterial3d(level_mats.add(w)));
             }
@@ -661,6 +671,15 @@ const LAMP_FIXTURE_GLOW: f32 = 8.0;
 /// every rung lights a fighter the same.
 const LAMP_DOWN_FROM: f32 = 13.0;
 const LAMP_CONE: (f32, f32) = (0.6, 1.05);
+/// A lamp within this of a roof over it is hung from it, and its cone:
+/// near a hemisphere, so it still lies in the floor far down a hall.
+const LAMP_HUNG_M: f32 = 0.8;
+/// A lamp within this of a wall is on it; how far off the wall its light
+/// stands, and its lit face (wide, tall), m.
+const LAMP_WALL_M: f32 = 0.6;
+const LAMP_OFF_WALL_M: f32 = 0.6;
+const LAMP_FACE_M: (f32, f32) = (0.7, 0.22);
+const LAMP_HUNG_CONE: (f32, f32) = (1.1, 1.45);
 /// Any lower lamp lights a room with a low ceiling, a metre or two over a
 /// head: its fixture is this small and this bright.
 const LAMP_ROOM_R: f32 = 0.34;
@@ -774,6 +793,18 @@ fn look(i: u8) -> (Color, f32, f32) {
 /// edge, so it wanders with its noise instead of stepping per vertex. The
 /// rock skin grows on the same weight (`look/cliffs.rs`).
 const ROCK_SLOPE: (f32, f32) = (0.45, 0.9);
+/// A snowed valley's cast concrete (`blast`, `blast_dark`), over the look's
+/// own tint: the set is a brown photograph, which in the sun on snow read
+/// as board. Its brown taken out and the whole lifted to a pale cool grey:
+/// darker than the snow, a clear step paler than the rock it stands in,
+/// so a base is found without its door's colour.
+const ALPINE_CONCRETE: [f32; 3] = [1.6, 1.9, 2.4];
+/// The same under a valley's snow (`Land::Alpine`): the vertices say rock
+/// only where the per-pixel veto (`look::ground::SNOW_CLIFF_TAN`, from 45°)
+/// already has, so the snow's edge is the pixel's, wandering with its
+/// noise. At the canyon's band every mountainside was a mottle of both,
+/// and with the two bands end to end the edge was the 2 m cells' teeth.
+const SNOW_ROCK_SLOPE: (f32, f32) = (1.2, 1.6);
 /// A creek bed is gravel: ground under the floor (below `CREEK_Y`, fully
 /// half a metre lower) that also lies in a trough, under both of its
 /// neighbours `CREEK_STENCIL_M` off along an axis by `CREEK_BASIN`'s first
@@ -790,18 +821,24 @@ const CREEK_BASIN: (f32, f32) = (0.6, 1.2);
 /// hills in patches, sand the rest.
 /// What kind of land a terrain is, for what grows on it and what lies
 /// round it: a canyon (Dry Fork: grass up its hills, gravel in its creek,
-/// land beyond its rim, a sea at its mouth), or an island over a void (a map
-/// with a `void`: bare sandstone and its rock, cloud all round and under).
+/// land beyond its rim, a sea at its mouth), an island over a void (a map
+/// with a `void`: bare sandstone and its rock, cloud all round and under),
+/// or a valley under snow (Icefall: a terrain with no void whose mood
+/// snows: drifts where the ground lies, cold rock where it stands, nothing
+/// growing, mountains beyond its rim).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Land {
     Canyon,
     Isle,
+    Alpine,
 }
 
 impl Land {
     pub fn of(def: &sim::map::Def) -> Land {
         if def.void > f32::NEG_INFINITY {
             Land::Isle
+        } else if crate::look::mood::of(def.id).snow {
+            Land::Alpine
         } else {
             Land::Canyon
         }
@@ -837,6 +874,61 @@ pub(crate) fn ground_point(t: &TerrainDef, i: usize, j: usize, land: Land) -> (f
         };
         return (slope, splat_in(slope, y, 0.0, 0.0));
     }
+    if land == Land::Alpine {
+        // Under snow: drifts where it lies, rock where it stands, and the
+        // rock's lane says which (the snow's is one less it). Nothing
+        // grows and no creek runs, so the other three carry what the
+        // paint reads (`ground.wgsl`): how far into a couloir a face is,
+        // how tall the face is, how thin the snow lies.
+        // A cut is rock to its rim: the vertex at a slot's inside corner lies
+        // on the mountain's gentle top, and as snow it drew a ruled white
+        // line down the corner's one cell of triangles.
+        let rock = if cut(t, i, j) { 1.0 } else { splat_snow(slope)[3] };
+        let (x, z) = (t.x0 + i as f32 * t.cell, t.z0 + j as f32 * t.cell);
+        // A face, and no cut: a slot let square into the mountain (a
+        // base's) is a plane to the paint, a wall's beds and no more.
+        let steep = slope > SNOW_ROCK_SLOPE.0 * 0.6;
+        let on_face = steep && !cut(t, i, j);
+        let (hollow, tall) = if steep && !on_face {
+            // A cut: a tall face (its beds are a wall's, not a massif's
+            // close-set ones) with no hollow and no broad one.
+            (0.5, 0.5)
+        } else if on_face {
+            // The second lane is two things: under a half, how tall the
+            // face is; over it, a tall face, and how far into a broad
+            // hollow (the bank at its foot stands highest there).
+            let tall = face_tall(t, x, z, dx, dz);
+            let bank = (face_hollow(t, x, z, dx, dz, BANK_REACH_M) / BANK_FULL_M).clamp(0.0, 1.0);
+            // Beside a cut the hollow is the slot's own corner, not a
+            // couloir: read as one it drew a ruled thread down the corner.
+            let hollow = if near_cut(t, i, j) {
+                0.0
+            } else {
+                face_hollow(t, x, z, dx, dz, HOLLOW_REACH_M) / HOLLOW_FULL_M
+            };
+            ((0.5 + hollow).clamp(0.0, 1.0), tall * (0.5 + 0.5 * bank))
+        } else {
+            // Off a face the first lane is free: whole on a pressure
+            // ridge, which the paint draws as ice and not as ground.
+            // And the second says how proud the ground stands (a crown
+            // under `CROWN_LANE.0`, a hollow over it, `CROWN_LANE.1` each
+            // way): all under where a face's own values start.
+            let ridge = crate::look::grass::ice_ridge(t, x, z, lowest_cached(t));
+            (
+                if ridge { 1.0 } else { 0.5 },
+                CROWN_LANE.0 - CROWN_LANE.1 * crate::look::grass::snow_crown(t, x, z),
+            )
+        };
+        return (
+            slope,
+            [
+                hollow,
+                tall,
+                crate::look::grass::snow_thin(t, x, z, lowest_cached(t)),
+                rock,
+            ],
+        );
+    }
     let cover = crate::look::grass::cover(t.x0 + i as f32 * t.cell, t.z0 + j as f32 * t.cell, y);
     (slope, splat_in(slope, y, trough, cover))
 }
@@ -849,6 +941,9 @@ pub(crate) fn splat_at(map: &sim::map::Map, x: f32, z: f32) -> [f32; 4] {
     let slope = (n.x * n.x + n.z * n.z).sqrt() / n.y.max(0.01);
     if map.void > f32::NEG_INFINITY {
         return splat_in(slope, y, 0.0, 0.0);
+    }
+    if crate::look::mood::of(map.id).snow {
+        return splat_snow(slope);
     }
     let s = CREEK_STENCIL_M;
     let along_x = map.ground(x + s, z).min(map.ground(x - s, z)) - y;
@@ -869,6 +964,154 @@ pub(crate) fn splat(slope: f32, y: f32) -> [f32; 4] {
 /// lies, rock where it stands, nothing else.
 pub(crate) fn splat_bare(slope: f32, y: f32) -> [f32; 4] {
     splat_in(slope, y, 0.0, 0.0)
+}
+
+/// How tall the face at (x, z) is, 0..1: the ground's fall along its own
+/// fall line (`dx`, `dz`: the slope there), followed up and down by steps
+/// of `FALL_STEP_M` for `FACE_REACH_M` each way or until it levels off
+/// (`FACE_END_SLOPE`), from `FACE_TALL_M.0` (a massif's or a spur's face:
+/// shelves, and nothing falls down it) to `.1` (a valley's wall, which
+/// feeds gullies and the bank at its foot: `ground.wgsl`). The fall within
+/// a box round it took in the wall behind a spur at its foot, and the spur
+/// was drawn with couloirs.
+const FACE_REACH_M: f32 = 24.0;
+const FALL_STEP_M: f32 = 2.0;
+const FACE_END_SLOPE: f32 = 0.45;
+const FACE_TALL_M: (f32, f32) = (34.0, 56.0);
+
+fn face_tall(t: &TerrainDef, x: f32, z: f32, dx: f32, dz: f32) -> f32 {
+    let at = |a: f32, b: f32| crate::look::grass::ground(t, a, b);
+    let Some(here) = at(x, z) else { return 0.0 };
+    let end = |way: f32| {
+        let (mut px, mut pz, mut h) = (x, z, here);
+        let (mut gx, mut gz) = (dx, dz);
+        for _ in 0..(FACE_REACH_M / FALL_STEP_M) as usize {
+            let len = gx.hypot(gz);
+            if len < FACE_END_SLOPE {
+                break;
+            }
+            let (qx, qz) = (px + way * gx / len * FALL_STEP_M, pz + way * gz / len * FALL_STEP_M);
+            let Some(next) = at(qx, qz) else { break };
+            if (next - h) * way <= 0.0 {
+                break;
+            }
+            (px, pz, h) = (qx, qz, next);
+            let (Some(a), Some(b), Some(c), Some(d)) =
+                (at(px + 1.0, pz), at(px - 1.0, pz), at(px, pz + 1.0), at(px, pz - 1.0))
+            else {
+                break;
+            };
+            (gx, gz) = ((a - b) * 0.5, (c - d) * 0.5);
+        }
+        h
+    };
+    let k = ((end(1.0) - end(-1.0) - FACE_TALL_M.0) / (FACE_TALL_M.1 - FACE_TALL_M.0)).clamp(0.0, 1.0);
+    k * k * (3.0 - 2.0 * k)
+}
+
+/// A slope no mountain's own wall reaches (its cliff's steepest stretch is
+/// 5, and ribs and crags take that to 12 or so): steeper is a cut. Vertex
+/// (i, j) is at one if it or a vertex beside it is: a cut's faces are a
+/// cell of plan for all their height, and every lane on them is a blend of
+/// its foot's and its rim's.
+const CUT_SLOPE: f32 = 17.0;
+/// Off a face, the second lane's middle and reach (`ground.wgsl` reads the
+/// same two).
+const CROWN_LANE: (f32, f32) = (0.05, 0.045);
+
+/// Whether a cut is within a couloir's reach of vertex (i, j).
+fn near_cut(t: &TerrainDef, i: usize, j: usize) -> bool {
+    let (nx, nz) = (t.nx as usize, t.nz as usize);
+    let r = (HOLLOW_REACH_M / t.cell).ceil() as usize;
+    (j.saturating_sub(r)..=(j + r).min(nz - 1)).step_by(2).any(|b| {
+        (i.saturating_sub(r)..=(i + r).min(nx - 1))
+            .step_by(2)
+            .any(|a| cut(t, a, b))
+    })
+}
+
+fn cut(t: &TerrainDef, i: usize, j: usize) -> bool {
+    let (nx, nz) = (t.nx as usize, t.nz as usize);
+    let h = |a: usize, b: usize| t.heights[b * nx + a] as f32 / HEIGHT_Q;
+    let steep = |a: usize, b: usize| {
+        let dx = (h((a + 1).min(nx - 1), b) - h(a.saturating_sub(1), b)) / (2.0 * t.cell);
+        let dz = (h(a, (b + 1).min(nz - 1)) - h(a, b.saturating_sub(1))) / (2.0 * t.cell);
+        dx.hypot(dz) > CUT_SLOPE
+    };
+    (j.saturating_sub(1)..=(j + 1).min(nz - 1))
+        .any(|b| (i.saturating_sub(1)..=(i + 1).min(nx - 1)).any(|a| steep(a, b)))
+}
+
+/// How far into a hollow the face at (x, z) is, m in the plan (none: a
+/// plane; less: a buttress's nose): how far the wall `reach` to each side
+/// stands out past the wall between, the heights' difference over the
+/// wall's own slope there, so a cleft reads the same at any height on it.
+/// Read `HOLLOW_UP_M` up the fall line (`dx`, `dz`: the ground's slope
+/// here), where the wall's ribs stand whole, so a couloir's line carries
+/// down to the foot. A cleft is a tent in it, as wide as twice the reach.
+/// At `HOLLOW_REACH_M` its ridge is the gully's line (`HOLLOW_FULL_M` of it
+/// either way for the first lane); at `BANK_REACH_M` its skirts are the
+/// bank under the gully, wider than it is tall (`BANK_FULL_M` for the
+/// whole of the second lane's upper half).
+const HOLLOW_UP_M: f32 = 8.0;
+const HOLLOW_REACH_M: f32 = 9.0;
+const HOLLOW_FULL_M: f32 = 14.0;
+const BANK_REACH_M: f32 = 28.0;
+const BANK_FULL_M: f32 = 7.0;
+
+fn face_hollow(t: &TerrainDef, x: f32, z: f32, dx: f32, dz: f32, reach: f32) -> f32 {
+    let len = dx.hypot(dz);
+    if len < 1e-3 {
+        return 0.0;
+    }
+    let (ux, uz) = (dx / len, dz / len);
+    let (qx, qz) = (x + ux * HOLLOW_UP_M, z + uz * HOLLOW_UP_M);
+    let at = |a: f32, b: f32| crate::look::grass::ground(t, a, b);
+    let (Some(mid), Some(l), Some(r)) = (
+        at(qx, qz),
+        at(qx - uz * reach, qz + ux * reach),
+        at(qx + uz * reach, qz - ux * reach),
+    ) else {
+        return 0.0;
+    };
+    // The wall's slope where it is read, up its fall line.
+    let steep = match (at(qx + ux, qz + uz), at(qx - ux, qz - uz)) {
+        (Some(a), Some(b)) => ((a - b) * 0.5).abs().max(0.5),
+        _ => len.max(0.5),
+    };
+    ((l + r) * 0.5 - mid) / steep
+}
+
+/// A terrain's lowest ground, m: a valley's ice.
+pub(crate) fn lowest(t: &TerrainDef) -> f32 {
+    t.heights
+        .iter()
+        .copied()
+        .min()
+        .map_or(f32::NEG_INFINITY, |q| q as f32 / HEIGHT_Q)
+}
+
+/// The same, kept for the terrain last asked about: a mesh asks once a vertex.
+fn lowest_cached(t: &TerrainDef) -> f32 {
+    use core::cell::Cell;
+    thread_local!(static LAST: Cell<(usize, f32)> = const { Cell::new((0, 0.0)) });
+    let key = t.heights.as_ptr() as usize;
+    LAST.with(|c| {
+        let (k, v) = c.get();
+        if k == key {
+            return v;
+        }
+        let v = lowest(t);
+        c.set((key, v));
+        v
+    })
+}
+
+/// The same under a valley's snow (`Land::Alpine`): snow (the sand's lane)
+/// where it lies, rock where it stands ([`SNOW_ROCK_SLOPE`]).
+pub(crate) fn splat_snow(slope: f32) -> [f32; 4] {
+    let rock = ((slope - SNOW_ROCK_SLOPE.0) / (SNOW_ROCK_SLOPE.1 - SNOW_ROCK_SLOPE.0)).clamp(0.0, 1.0);
+    [1.0 - rock, 0.0, 0.0, rock]
 }
 
 /// The weights, given how much of a trough the spot lies in (0..1) and how
@@ -943,6 +1186,122 @@ fn terrain_mesh(t: &TerrainDef, land: Land) -> Mesh {
         .with_inserted_indices(Indices::U32(idx))
 }
 
+/// Whether a block's top (at `top`, over `mid`) is open to the sky: nothing
+/// built stands over its middle. Where snow settles (`weathering::Block::open`).
+fn open_top(map: &sim::map::Map, mid: Vec3, top: f32) -> bool {
+    !map.occupied(mid.x, mid.z, 0.3, top + 0.2, top + 200.0)
+}
+
+/// The halls of a map whose sky does not light them (a snowed valley's
+/// hangars; `on`): each found once, as a box.
+struct Halls {
+    on: bool,
+    found: Vec<(Vec3, Vec3)>,
+}
+
+/// A hall is at least this much floor (a nook under an overhang is not
+/// one), searched by steps of `HALL_STEP_M` out to `HALL_REACH_M`.
+const HALL_MIN_M2: f32 = 80.0;
+const HALL_STEP_M: f32 = 1.0;
+const HALL_REACH_M: f32 = 60.0;
+
+impl Halls {
+    /// The hall a block (`mid`, `half`) stands in or bounds
+    /// (`weathering::Block::hall`): the first found a hand off one of its
+    /// faces, at its middle's height, near its top or near its foot.
+    fn of(&mut self, map: &sim::map::Map, mid: Vec3, half: Vec3) -> Option<(Vec3, Vec3)> {
+        if !self.on {
+            return None;
+        }
+        const OFF: f32 = 0.6;
+        let side = [mid.y, mid.y + half.y - 2.0, mid.y - half.y + 1.0];
+        let mut at = vec![
+            Vec3::new(mid.x, mid.y + half.y + OFF, mid.z),
+            Vec3::new(mid.x, mid.y - half.y - OFF, mid.z),
+        ];
+        for y in side {
+            for (dx, dz) in [(1.0, 0.0), (-1.0, 0.0), (0.0, 1.0), (0.0, -1.0)] {
+                at.push(Vec3::new(mid.x + dx * (half.x + OFF), y, mid.z + dz * (half.z + OFF)));
+            }
+        }
+        for p in at {
+            if let Some(h) = self
+                .found
+                .iter()
+                .find(|(lo, hi)| p.cmpgt(*lo).all() && p.cmplt(*hi).all())
+            {
+                return Some(*h);
+            }
+            if !hall_open(map, p.x, p.y, p.z) {
+                continue;
+            }
+            if let Some(h) = hall_box(map, p) {
+                self.found.push(h);
+                return Some(h);
+            }
+        }
+        None
+    }
+}
+
+/// Whether (x, y, z) is in the air under something built.
+fn hall_open(map: &sim::map::Map, x: f32, y: f32, z: f32) -> bool {
+    map.ground(x, z) < y && !map.occupied(x, z, 0.1, y - 0.1, y + 0.1) && crate::look::rain::covered(map, x, y, z)
+}
+
+/// The hall round `p`, floor to roof: every place joined to it under
+/// cover at its height. A place counts toward the box only if it is open
+/// just under the roof too, so a door's own depth (under its lintel) is
+/// the wall's and not the hall's, and the box ends at the walls' inner
+/// faces, to a step.
+fn hall_box(map: &sim::map::Map, p: Vec3) -> Option<(Vec3, Vec3)> {
+    use sim::geom::V3;
+    let up = map.ray(
+        V3::new(p.x, p.y, p.z),
+        V3::new(0.0, 1.0, 0.0),
+        crate::look::rain::SHELTER_UP_M,
+    );
+    let down = map.ray(V3::new(p.x, p.y, p.z), V3::new(0.0, -1.0, 0.0), 30.0);
+    let under = p.y + up - 0.6;
+    let n = (HALL_REACH_M / HALL_STEP_M) as i32;
+    let side = (2 * n + 1) as usize;
+    let mut seen = vec![false; side * side];
+    seen[n as usize * side + n as usize] = true;
+    let mut queue = vec![(0i32, 0i32)];
+    let (mut lo, mut hi) = (Vec2::splat(f32::MAX), Vec2::splat(f32::MIN));
+    let mut cells = 0;
+    while let Some((i, j)) = queue.pop() {
+        let (x, z) = (p.x + i as f32 * HALL_STEP_M, p.z + j as f32 * HALL_STEP_M);
+        if under <= p.y || !map.occupied(x, z, 0.1, under - 0.1, under + 0.1) {
+            lo = lo.min(Vec2::new(x, z));
+            hi = hi.max(Vec2::new(x, z));
+            cells += 1;
+        }
+        for (di, dj) in [(1, 0), (-1, 0), (0, 1), (0, -1)] {
+            let (a, b) = (i + di, j + dj);
+            if a.abs() > n || b.abs() > n {
+                continue;
+            }
+            let k = (b + n) as usize * side + (a + n) as usize;
+            if seen[k] {
+                continue;
+            }
+            seen[k] = true;
+            if hall_open(map, p.x + a as f32 * HALL_STEP_M, p.y, p.z + b as f32 * HALL_STEP_M) {
+                queue.push((a, b));
+            }
+        }
+    }
+    if cells as f32 * HALL_STEP_M * HALL_STEP_M < HALL_MIN_M2 {
+        return None;
+    }
+    let m = HALL_STEP_M * 0.5;
+    Some((
+        Vec3::new(lo.x - m, p.y - down - 0.3, lo.y - m),
+        Vec3::new(hi.x + m, p.y + up + 0.3, hi.y + m),
+    ))
+}
+
 /// Spawns map `id`'s level; `old` is the last one's, taken down first.
 #[allow(clippy::too_many_arguments)]
 pub fn build(
@@ -964,6 +1323,10 @@ pub fn build(
     };
     let map = def.build();
     let land = Land::of(def);
+    let mut halls = Halls {
+        on: land == Land::Alpine,
+        found: Vec::new(),
+    };
     // The lights the level makes itself, for what they lay on its floors
     // (`look/floor_shade.rs`).
     let mut lights = crate::look::floor_shade::Lights::default();
@@ -1046,15 +1409,55 @@ pub fn build(
             half: (max - min) * 0.5,
             turn: (1.0, 0.0),
             shape: Shape::Box,
-            ground: ground_at(mid.x, mid.z),
+            // Under snow a block that stands on another (a parapet on a
+            // deck) has its foot there: snow lies against it, not against
+            // the ground far under it.
+            ground: if land == Land::Alpine
+                && min.y > ground_at(mid.x, mid.z) + 0.5
+                && map.occupied(mid.x, mid.z, 0.2, min.y - 0.4, min.y - 0.05)
+            {
+                min.y
+            } else {
+                ground_at(mid.x, mid.z)
+            },
             run: None,
             hidden: rock::hidden_edges(min, max, i, &all),
             own_value: true,
+            open: open_top(&map, mid, max.y),
+            hall: halls.of(&map, mid, (max - min) * 0.5),
+            foot: 0b1111,
         };
+        // A block on another's top has a floor only where that top runs on
+        // past its side (a parapet on a deck's edge: on the deck's side).
+        if block.ground == min.y {
+            let under = |x: f32, z: f32| map.occupied(x, z, 0.15, min.y - 0.4, min.y - 0.05);
+            const OUT: f32 = 0.4;
+            block.foot = u8::from(under(max.x + OUT, mid.z))
+                | u8::from(under(min.x - OUT, mid.z)) << 1
+                | u8::from(under(mid.x, max.z + OUT)) << 2
+                | u8::from(under(mid.x, min.z - OUT)) << 3;
+        }
+        // Under snow the wind bares a top's lip only where its floor ends:
+        // not where another box (or the hill) carries it on past that side.
+        if land == Land::Alpine {
+            const OUT: f32 = 0.4;
+            let on =
+                |x: f32, z: f32| map.occupied(x, z, 0.15, max.y - 0.4, max.y - 0.05) || ground_at(x, z) > max.y - 0.3;
+            let along = |f: &dyn Fn(f32) -> (f32, f32)| {
+                [0.25, 0.5, 0.75].into_iter().filter(|&t| on(f(t).0, f(t).1)).count() >= 2
+            };
+            let (dx, dz) = (max.x - min.x, max.z - min.z);
+            block.foot |= u8::from(along(&|t| (max.x + OUT, min.z + dz * t))) << 4
+                | u8::from(along(&|t| (min.x - OUT, min.z + dz * t))) << 5
+                | u8::from(along(&|t| (min.x + dx * t, max.z + OUT))) << 6
+                | u8::from(along(&|t| (min.x + dx * t, min.z - OUT))) << 7;
+        }
         // A long box on uneven ground: its grime follows the ground along
         // it, not the height under its middle (an end wall across a
         // canyon's floor and up its banks).
-        if map.terrain.is_some() {
+        // Not one that stands on another block: its foot is that block's
+        // top, level end to end, whatever the ground does far under it.
+        if map.terrain.is_some() && block.ground != min.y {
             let size = max - min;
             let along_x = size.x >= size.z;
             if size.x.max(size.z) > RUN_MIN_M {
@@ -1128,7 +1531,9 @@ pub fn build(
                 min,
                 max,
                 key: box_key(mid, id),
-                pale: land == Land::Isle,
+                // An island's sandstone and a snowed valley's cold stone: never the canyon's red.
+                pale: land != Land::Canyon,
+                cold: land == Land::Alpine,
             });
         }
     }
@@ -1137,8 +1542,9 @@ pub fn build(
     crate::look::built::spawn(commands, id);
     // And trees along the rim over the walls, out of reach too, and the
     // land beyond it (`look/far.rs`).
-    // An island has none: the cloud is its distance.
-    if let Some(t) = def.terrain.as_ref().filter(|_| land == Land::Canyon) {
+    // An island has none: the cloud is its distance. A valley under snow
+    // has the land (more mountains, white) and no trees up on its rim.
+    if let Some(t) = def.terrain.as_ref().filter(|_| land != Land::Isle) {
         crate::look::far::spawn(
             commands,
             meshes,
@@ -1148,9 +1554,15 @@ pub fn build(
             hi.0,
             def.light.sea,
             id as u32,
+            land == Land::Alpine,
         );
         let ground = |x: f32, z: f32| crate::look::grass::ground(t, x, z);
-        for (foot, height, kind, seed) in crate::look::trees::rim(ground, lo, hi, id as u32) {
+        let rim = if land == Land::Canyon {
+            crate::look::trees::rim(ground, lo, hi, id as u32)
+        } else {
+            Vec::new()
+        };
+        for (foot, height, kind, seed) in rim {
             let cards = cards.get(images);
             for (mesh, mat, at) in
                 crate::look::trees::tree(kind, seed, crate::look::trees::RIM_TRUNK_R, height, cards, meshes, mats)
@@ -1248,6 +1660,9 @@ pub fn build(
             run: None,
             hidden: rock::hidden_edges(min, max, usize::MAX, &all),
             own_value: true,
+            open: open_top(&map, mid, max.y),
+            hall: halls.of(&map, mid, size * 0.5),
+            foot: 0b1111,
         };
         commands.spawn((
             LevelPart,
@@ -1298,9 +1713,12 @@ pub fn build(
             let sim::solid::Shape::Round { x, z, r } = sol.shape else {
                 continue;
             };
-            // Most of the canyon's trees are in leaf (`trees::in_leaf`).
+            // Most of the canyon's trees are in leaf (`trees::in_leaf`);
+            // under snow a snag is bare.
             let kind = match kind {
-                crate::look::trees::Kind::Dead if crate::look::trees::in_leaf(x, z) => crate::look::trees::Kind::Live,
+                crate::look::trees::Kind::Dead if land != Land::Alpine && crate::look::trees::in_leaf(x, z) => {
+                    crate::look::trees::Kind::Live
+                }
                 k => k,
             };
             // Each tree its own, from where it stands (a mirrored twin differs).
@@ -1363,6 +1781,9 @@ pub fn build(
                 run: None,
                 hidden: 0,
                 own_value: false,
+                open: open_top(&map, Vec3::new(x, 0.0, z), sol.y1),
+                hall: halls.of(&map, Vec3::new(x, sol.y0 + hy, z), Vec3::new(r, hy, r)),
+                foot: 0b1111,
             },
             // No wear: an arc is turned segments overlapping at their
             // ends, and each one's end edges are inside the next.
@@ -1375,6 +1796,9 @@ pub fn build(
                 run: None,
                 hidden: 0,
                 own_value: false,
+                open: open_top(&map, Vec3::new(x, 0.0, z), sol.y1),
+                hall: halls.of(&map, Vec3::new(x, sol.y0 + hy, z), Vec3::new(hx, hy, hz)),
+                foot: 0b1111,
             },
             // No wear either: the edges a box's wear is laid along aren't
             // there on a curve.
@@ -1390,6 +1814,9 @@ pub fn build(
                     run: None,
                     hidden: 0,
                     own_value: false,
+                    open: open_top(&map, mid, b.y),
+                    hall: halls.of(&map, mid, Vec3::new(b.x - a.x, b.y - a.y, b.z - a.z) * 0.5),
+                    foot: 0b1111,
                 }
             }
         };
@@ -1498,6 +1925,52 @@ pub fn build(
     }
     for &(p, c, lm) in map.light.lamps {
         let colour = Color::srgb(c[0], c[1], c[2]);
+        // Hung close under a roof in a snowed valley's hall (a strip's own
+        // light): it throws down and wide, and the strip is its fixture. As
+        // a point it lit the roof a hand over it far harder than the floor,
+        // and what stands on the roof's far side.
+        let hung = land == Land::Alpine
+            && map.ray(
+                sim::geom::V3::new(p[0], p[1], p[2]),
+                sim::geom::V3::new(0.0, 1.0, 0.0),
+                LAMP_HUNG_M,
+            ) < LAMP_HUNG_M;
+        // Beside a wall, and which way is out from it.
+        let out = (land == Land::Alpine && !hung)
+            .then(|| {
+                [(1.0, 0.0), (-1.0, 0.0), (0.0, 1.0), (0.0, -1.0)]
+                    .into_iter()
+                    .map(|(dx, dz)| {
+                        let d = map.ray(
+                            sim::geom::V3::new(p[0], p[1], p[2]),
+                            sim::geom::V3::new(dx, 0.0, dz),
+                            LAMP_WALL_M,
+                        );
+                        (Vec3::new(-dx, 0.0, -dz), d)
+                    })
+                    .find(|&(_, d)| d < LAMP_WALL_M)
+            })
+            .flatten();
+        // How far the wall is behind it.
+        let behind = out.map_or(0.0, |(_, d)| d);
+        let out = out.map(|(o, _)| o);
+        if hung {
+            commands.spawn((
+                LevelPart,
+                SpotLight {
+                    color: colour,
+                    intensity: lm,
+                    range: LAMP_RANGE,
+                    radius: 0.15,
+                    inner_angle: LAMP_HUNG_CONE.0,
+                    outer_angle: LAMP_HUNG_CONE.1,
+                    shadows_enabled: false,
+                    ..default()
+                },
+                Transform::from_xyz(p[0], p[1], p[2]).looking_to(Dir3::NEG_Y, Vec3::Z),
+            ));
+            continue;
+        }
         if p[1] >= LAMP_DOWN_FROM {
             commands.spawn((
                 LevelPart,
@@ -1514,6 +1987,9 @@ pub fn build(
                 Transform::from_xyz(p[0], p[1], p[2]).looking_to(Dir3::NEG_Y, Vec3::Z),
             ));
         } else {
+            // A valley's lamp beside a wall stands off it (against the
+            // wall its pool was a tight disc) and shows a lit face.
+            let at = Vec3::new(p[0], p[1], p[2]) + out.unwrap_or(Vec3::ZERO) * LAMP_OFF_WALL_M;
             commands.spawn((
                 LevelPart,
                 PointLight {
@@ -1524,11 +2000,48 @@ pub fn build(
                     shadows_enabled: false,
                     ..default()
                 },
-                Transform::from_xyz(p[0], p[1], p[2]),
+                Transform::from_translation(at),
             ));
         }
         // A built set draws its own.
         if crate::look::built::of(id).is_some() {
+            continue;
+        }
+        // On a wall: a lit face turned out from it on a dark back plate
+        // (a ceiling's disc on a wall is seen edge-on, a dark dash).
+        if let Some(out) = out.filter(|_| p[1] < LAMP_DOWN_FROM) {
+            let along_x = out.x.abs() < 0.5;
+            let face = |w: f32, h: f32, d: f32| {
+                if along_x {
+                    Cuboid::new(w, h, d)
+                } else {
+                    Cuboid::new(d, h, w)
+                }
+            };
+            let mid = Vec3::new(p[0], p[1], p[2]);
+            commands.spawn((
+                LevelPart,
+                Mesh3d(meshes.add(face(LAMP_FACE_M.0, LAMP_FACE_M.1, 0.06))),
+                MeshMaterial3d(mats.add(StandardMaterial {
+                    base_color: colour,
+                    emissive: LinearRgba::from(colour) * LAMP_ROOM_GLOW,
+                    ..default()
+                })),
+                Transform::from_translation(mid - out * (behind - 0.06)),
+                bevy::light::NotShadowCaster,
+            ));
+            commands.spawn((
+                LevelPart,
+                Mesh3d(meshes.add(face(LAMP_FACE_M.0 + 0.24, LAMP_FACE_M.1 + 0.2, 0.04))),
+                MeshMaterial3d(mats.add(StandardMaterial {
+                    base_color: Color::srgb(0.1, 0.1, 0.12),
+                    perceptual_roughness: 0.5,
+                    metallic: 0.6,
+                    ..default()
+                })),
+                Transform::from_translation(mid - out * (behind - 0.02)),
+                bevy::light::NotShadowCaster,
+            ));
             continue;
         }
         // Its fixture: a lit disc in a dark ring.
@@ -1573,15 +2086,32 @@ pub fn build(
             // vehicles' bays and the walls (`look/grass.rs`,
             // `look/clutter.rs`). Neither casts a shadow (a rung without
             // them would light a fighter's feet they shade). An island's
-            // bare sandstone grows dry tufts and sheds its own chips; one
-            // under snow, neither.
+            // bare sandstone grows dry tufts and sheds its own chips; an
+            // island under snow, neither; a valley under snow, dry tufts
+            // and dark stones through it.
             let seed = id as u32 * 7919 + 1;
             let clear = crate::look::grass::Clear::pads(&map);
             let isle = land == Land::Isle;
-            let snowed = isle && crate::look::mood::of(id).snow;
-            let grows = |v: Vec<_>| if snowed { Vec::new() } else { v };
-            for (mesh, centre, layer) in grows(crate::look::grass::blocks(t, lo, hi, seed, &clear, def.light.sea, isle))
-            {
+            let snowed = crate::look::mood::of(id).snow;
+            // A valley under snow: dry tufts through it in drifts (as an
+            // island's sand grows them), none on its ice or by its shore.
+            let cover = if land == Land::Alpine {
+                let ice = t
+                    .heights
+                    .iter()
+                    .copied()
+                    .min()
+                    .map_or(f32::NEG_INFINITY, |q| q as f32 / HEIGHT_Q);
+                // Off what is built, too (the clutter's own places): its
+                // ground runs on under a hangar's floor.
+                let clear = crate::look::clutter::clear(&map, t);
+                crate::look::grass::blocks(t, lo, hi, seed, &clear, ice, true, true)
+            } else if snowed {
+                Vec::new()
+            } else {
+                crate::look::grass::blocks(t, lo, hi, seed, &clear, def.light.sea, isle, false)
+            };
+            for (mesh, centre, layer) in cover {
                 commands.spawn((
                     LevelPart,
                     GrassPart,
@@ -1597,14 +2127,18 @@ pub fn build(
                 ));
             }
             let clear = crate::look::clutter::clear(&map, t);
-            for (mesh, centre, layer) in grows(crate::look::clutter::blocks(
-                t,
-                lo,
-                hi,
-                seed ^ 0xc1a7_7e75,
-                &clear,
-                isle,
-            )) {
+            let soil = match land {
+                Land::Canyon => crate::look::clutter::Soil::Canyon,
+                Land::Isle => crate::look::clutter::Soil::Isle,
+                Land::Alpine => crate::look::clutter::Soil::Snow,
+            };
+            // An island under snow sheds nothing; a valley's stones show through.
+            let litter = if snowed && land != Land::Alpine {
+                Vec::new()
+            } else {
+                crate::look::clutter::blocks(t, lo, hi, seed ^ 0xc1a7_7e75, &clear, soil)
+            };
+            for (mesh, centre, layer) in litter {
                 commands.spawn((
                     LevelPart,
                     ClutterPart,
@@ -1622,7 +2156,17 @@ pub fn build(
             // The sea's height: a canyon's shore is wet up from it, an
             // island's keel and stacks are lapped by the cloud at it
             // (`look/ground.rs`, the lap).
-            let wet_from = map.light.sea;
+            // A valley under snow has no sea: its lowest ground, the lake's
+            // flat, is its ice, and the ground is told its level instead.
+            let wet_from = if land == Land::Alpine {
+                t.heights
+                    .iter()
+                    .copied()
+                    .min()
+                    .map_or(f32::NEG_INFINITY, |q| q as f32 / HEIGHT_Q)
+            } else {
+                map.light.sea
+            };
             let soil = mats.add(StandardMaterial {
                 base_color: Color::srgb(0.75, 0.62, 0.48),
                 perceptual_roughness: 0.95,
@@ -1713,6 +2257,9 @@ pub fn build(
                         run: None,
                         hidden: 0,
                         own_value: false,
+                        open: false,
+                        hall: None,
+                        foot: 0b1111,
                     },
                     Mesh3d(meshes.add({
                         // Cut where the boxes stand on it.

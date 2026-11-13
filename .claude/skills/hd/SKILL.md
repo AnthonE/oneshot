@@ -22,11 +22,32 @@ ONESHOT_BIN=crates/client/target/release/oneshot tools/hd.sh   # the release cli
 ELO_REF_DIR=moodboard node tools/board.mjs look --views hd-beach,hd-cliff,hd-meadow,hd-vista,hd-inland,hd-base
                                     # shoot, then the sheet: reference | now | last pass, with the marks
 node ci/look.mjs 'map=3&eye=127,-0.2,4&look=150,-5,-6'         # the same eye in the WebGL2 page (SwiftShader, minutes)
+HD_MAP=9 ELO_REF_DIR=moodboard node tools/board.mjs look --views hd-ice_base,hd-ice_lake,…
+                                    # one map's loop: only its views are shot (HD_JOBS=2: two at once, on a GPU)
+tools/hd.sh refs                    # the references the board gives a source (public photographs) → moodboard/
 ```
+
+On a box with no display or GPU (a cloud session) `tools/hd.sh` starts Xvfb and draws on lavapipe: the same frame, about a minute and a half a view (most of it the level's load), so shoot one map (`HD_MAP`), one at a time (a debug client on lavapipe holds 6 to 8 GB, and a second on a 16 GB box is killed; nothing else heavy beside it).
 
 Build first: `cd crates/client && cargo build` (a minute or two after a change; a shader in `assets/shaders` or a file in `assets` needs none). The references are other games' screenshots in `moodboard/` (the hdlook pictures for nature up close, the Blood Gulch ones for a canyon's walls, trails and bases; git-ignored, the board's private refs): a target for the look, never an asset. Nothing is traced, copied or published from them, and no prompt names them.
 
+Icefall's and Pithead's references are real photographs (for light, colour, texture and weather, never a plan). Icefall's are from Wikimedia Commons, each on the board with its source and licence, so `tools/hd.sh refs` fetches them on any box.
+
 The views are `tools/hd.sh`'s `VIEWS` and the board's `hd-*` (`board/board.json`: each with what to take from its reference and what to ignore). A new one goes in both. `hd-judge` (`.claude/agents/hd-judge.md`) reads a view against its reference without your hopes for it.
+
+## A round with judges
+
+One `hd-judge` a view, all at once, each told three things: the pass it is reading (`traces/hd/<view>.png`, the same frame as the newest folder under `board/passes/`), the pass before it by its folder's name (the judge's own rule would take the newest, which is this one), and what changed since, one line a change, so its "since the last pass" can say what each did. Then:
+
+- **Freeze the tree while they read.** A judge reads the code a gap points at; a file that changes under it is reported as a change it could not see in the frame.
+- **Read the sheet yourself first.** A defect you can see (something growing through a floor, a colour that is plainly a bug, a pattern that is worse than the last pass) is fixed and shot again before a judge is spent on it. Their read is for what you no longer see.
+- **Rank across the views, not within one.** The gap most of them put first is the round's; a view's own gap that no other shares waits, unless it is its whole frame.
+- **A view that cannot see its take is the first gap.** Half of Icefall's first eyes stood where a lip, a deck or the view's own subject hid what the view was named for; the judges said so before anything else, and a moved eye loosens one round's comparison and no more.
+- **Batch what does not overlap.** A pass is ten minutes on a box with no GPU: a round may change the rock, the snow and the concrete at once, each its own constant and its own line in what the judges are told.
+- **One view before eight.** After a shader change shoot one view and look at it: a shader that does not compile still gives a frame (`tools/hd.sh` refuses it and prints the error; `from` and `patch` are WGSL's words, not names), and a rule that draws blotches is seen in one frame, not in a pass.
+- **Run the client's tests before the judges, not after** (`cargo test --lib` in `crates/client`): a mood has floors a look may not go under (`every_mood_keeps_a_fighter_readable`: the fill at 0.7), and a pass shot under one is judged for light it cannot keep.
+- **Name the map to the board** (`HD_MAP=9 … node tools/board.mjs look --views …`): without it the board shoots every map's views before it reads one, half an hour here.
+- **Stop a round on a rule, not a feeling.** A judge always has five gaps. The round is over when what they put first is the operator's (the layout, the sun, the mist, a thing in play) or when two passes running leave the verdicts where they were.
 
 ## What the references have
 
@@ -44,6 +65,19 @@ Read a view against this list, top down; the first line that fails over a large 
 | **water** | a hard horizon, the sky in it, rock standing in it | `water.rs`, `water.wgsl` |
 | **life** | something moving: spray, dust, motes, grass in wind | `look/fx/` (the pools), `foliage.rs` |
 | **light** | sun and shade far apart, shade with colour in it | `mood.rs`, `rig.rs`, `fill.rs`, `quality.rs` (shadows, AO) |
+
+## A valley under snow
+
+Icefall is the third land (`level::Land::Alpine`: a terrain with no void whose mood snows). The same list, where its own numbers are:
+
+| layer | where ours is |
+|---|---|
+| **ground** | snow is the sand's lane reading the drift set (`ground::ICE_TINT`, `textures::DRIFT_TILE_M`, `tools/snow.py`); the lake is the terrain's own flat (`alpine.lake` in `maps/icefall/map.json`) |
+| **rock** | where snow gives way to rock: `level::SNOW_ROCK_SLOPE` a vertex, `ground::SNOW_CLIFF_TAN` a pixel; the wall's shape is the `alpine` block (`cliff`, `ribs`, `crags`, `peaks`, a massif's `flank`), at 2 m a cell. What the paint knows of that shape is in the mesh's lanes under snow (`level::ground_point`, carried by the cliff skin): how far into a cleft a face is (`face_hollow`: a couloir's thread; read broader, the bank at the foot), how tall the face is down its own fall line (`face_tall`: a massif and a spur get shelves only), whether it is a cut (`cut`: a base's slot is a plane). The shelves, bands, couloirs and bank that read them are `ground.wgsl`'s valley block, whose header lists what each earlier rule drew wrong |
+| **cover** | one rule says where snow lies thin (`grass::snow_thin`: low crowns, flanks, the ice's shore and islets; not against a face, not on high ground): the ground's windows (`ground.wgsl` `SCOUR_*`, the mesh's third lane), the tufts (`grass.rs`, `STRAW_COLD`) and the stones (`clutter.rs`, `Soil::Snow`) all read it |
+| **things standing** | the bases, the col's station and the snow shed are boxes in `map.json` (`blast`, `blast_dark`, `steel`, `tread`); boulders in `boulders::COLD_TINT`; snags (`dead_tree`, never in leaf) |
+| **distance** | `far.rs` (`SNOW`, `SNOW_ROCK`), `mood::FROST`'s mist |
+| **light** | `mood::FROST`: the sun in the south, the south wall's shade over the moraine |
 
 ## Changing one thing
 
@@ -76,4 +110,5 @@ Read a view against this list, top down; the first line that fails over a large 
 - **Cloud shadows cross Dry Fork**, so two passes minutes apart differ in light; the pose mode's clock starts the same each run, so two shots a run apart do not.
 - **This box's Blender has no denoiser**: a Cycles bake that asks for one comes back black (`rocks.py` turns it off). Run from a script, `bpy.ops.object.bake` reads its own arguments, not the scene's.
 - **Meshy's mesh is cut along every seam of its map**: weld it before thinning it, and bake onto a copy with a map of its own, or the paint smears. What Meshy calls metal has no colour to bake; bake the paint as emitted light.
+- **A pixel is long at a grazing eye.** Its footprint on the ground a few metres off is many times longer away from the eye than across (`fp_m`, the longer side, is what a far thing fades by). What must go when it is too *large* on screen (a painted stone with no body, a puddle at the feet) fades by the shorter side, or it never goes.
 - **A view inside a hill measures nothing.** Put an eye 1.7 m over the ground (the scratch probe: a crate that prints `Terrain::height`).

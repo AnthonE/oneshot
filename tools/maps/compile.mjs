@@ -55,9 +55,20 @@
 //                                              to the ground over `blend`: a
 //                                              post-pass that replaces,
 //                                              never adds (a base's floor)
+//               { level: [x0, z0, x1, z1], h, blend }  the same over a
+//                                              rectangle: a notch cut into a
+//                                              mountainside for what is built
+//                                              in it (a cliff round it when
+//                                              `blend` is a cell); `blend`
+//                                              may be one a side, [-x, +x,
+//                                              -z, +z] (an apron: sharp at
+//                                              the wall, long down the bank)
 //             each with mirror: bool. With gen "canyon" the `canyon` block
 //             (see `canyon()` below) raises scree, cliffs and mesas around
-//             the shapes, with pockets, gullies, strata and a sea end. The
+//             the shapes, with pockets, gullies, strata and a sea end; with
+//             gen "alpine" the `alpine` block (see `alpine()`) rings a
+//             valley with mountains, stands massifs in it and freezes a
+//             lake, the shapes laid over those. The
 //             heights are written as integers (1/128 m), so the sim never
 //             reads a float made here.
 //   rocks     { seed, ... }: boulder formations planned from the seed and
@@ -840,6 +851,184 @@ function canyon(c, sea, fail) {
   };
 }
 
+/** A valley ringed by mountains, from the terrain's `alpine` block: a floor
+ * inside a rounded outline, a scree bank and a cliff at its edge and peaks
+ * behind, massifs standing in the valley and a frozen lake let into its
+ * floor. The shapes are laid over all of it. The maths is the canyon's
+ * (fade'd gates, a PCHIP profile, `ridged` crags). All of it in metres:
+ *   seed      the noise's
+ *   detail    { h, wave, octaves }: fBm over the floor, ±h at `wave` m (the
+ *             wind's drifts)
+ *   warp      { m, wave, octaves }: the rim's coordinates moved by ±m
+ *   rim       { half: [a, b], round }: the cliff's foot, a rectangle of
+ *             those half-extents with its corners rounded to `round`
+ *   bays      [{ at: [x, z], r, w, mirror }]: the cliff's foot pushed back by
+ *             up to w within r of a point (a cove), or forward with w < 0
+ *             (a buttress)
+ *   scree     { h, w }: the bank rising h over w m to the cliff's foot
+ *   cliff     [[e, h], ...]: the wall's profile, height by distance past its
+ *             foot, a monotone cubic; starts at [0, scree.h]
+ *   slope     how much it goes on rising past the cliff's last knot, m a m
+ *   peaks     { h, wave, from, over }: summits and saddles, ±h at `wave` m,
+ *             fading in from `from` over `over` m past the foot
+ *   crags     { h, wave, from, over, fine? }: a ridged relief on the
+ *             faces; `fine` the share of it at 0.4 of the wave (0.35)
+ *   ribs      { m, wave, from, over }?: buttresses and couloirs: the face
+ *             read up to 2m further past its foot, broad buttresses
+ *             standing out between narrow clefts `wave` m apart that keep
+ *             the wall's own line,
+ *             taken on from `from` over `over` m (more than 1.5 m, so the
+ *             wall never dips; its foot and the floor do not move)
+ *   massifs   [{ from: [x, z], to: [x, z], crest: [[u, y], ...],
+ *             half: [[u, w], ...], flank?: [a, b], crags?: k, mirror }]: a
+ *             ridge along a line, its crest's height and its half-width by
+ *             distance u along it (monotone cubics), falling off across it:
+ *             all the way from the crest, or with `flank` level out to a of
+ *             the half-width, down by b of it and level again (a top to
+ *             stand on, a face nobody climbs, a foot to drive round);
+ *             `crags` scales the rim's crags onto its flanks
+ *   lake      { box: [x0, z0, x1, z1], round, y, shore }: ice, flat at y
+ *             inside the rounded rectangle, the floor easing down to it over
+ *             `shore` m outside
+ *   seam      with it, the noise is the same either side of x = 0 (read at
+ *             |x|), dying away over `seam` m to the middle so no crease runs
+ *             down it: a map mirrored in x whose two sides stand on the same
+ *             ground. The lake's box then spans the middle evenly */
+function alpine(a, mirrors, fail) {
+  if (!a || typeof a !== 'object') fail('terrain: gen "alpine" needs an "alpine" block');
+  const num = (o, k, what) => {
+    const v = o?.[k];
+    if (typeof v !== 'number' || !Number.isFinite(v)) fail(`alpine.${what}: a number`);
+    return v;
+  };
+  const seed = num(a, 'seed', 'seed') | 0;
+  const K = (n) => (Math.imul(seed, 0x9e3779b1) + n * 16) | 0;
+  const [dH, dWave, dOct] = [num(a.detail, 'h', 'detail.h'), num(a.detail, 'wave', 'detail.wave'), a.detail.octaves ?? 2];
+  const [wM, wWave, wOct] = [num(a.warp, 'm', 'warp.m'), num(a.warp, 'wave', 'warp.wave'), a.warp.octaves ?? 2];
+  const rimHalf = a.rim?.half;
+  if (!Array.isArray(rimHalf) || rimHalf.length !== 2 || rimHalf.some((v) => !(v > 0))) fail('alpine.rim.half: [a, b]');
+  const rimRound = num(a.rim, 'round', 'rim.round');
+  if (!(rimRound >= 0 && rimRound <= Math.min(rimHalf[0], rimHalf[1]))) fail('alpine.rim.round: 0 to the smaller half-extent');
+  const images = (m) => [[1, 1]].concat(m ? mirrors.map(([sx, sz]) => [sx, sz]) : []);
+  const bays = [];
+  for (const [k, b] of (a.bays || []).entries()) {
+    if (!Array.isArray(b.at) || b.at.length !== 2 || !(b.r > 0) || typeof b.w !== 'number') fail(`alpine.bays ${k}: { at: [x, z], r, w }`);
+    for (const [sx, sz] of images(b.mirror)) bays.push([b.at[0] * sx, b.at[1] * sz, b.r, b.w]);
+  }
+  const [screeH, screeW] = [num(a.scree, 'h', 'scree.h'), num(a.scree, 'w', 'scree.w')];
+  const cliff = pchip(a.cliff, fail, 'alpine.cliff');
+  const [cliffFoot, footH] = a.cliff[0], [cliffTop, topH] = a.cliff[a.cliff.length - 1];
+  if (cliffFoot !== 0 || footH !== screeH) fail('alpine.cliff: starts at [0, scree.h], where the scree ends');
+  const slope = num(a, 'slope', 'slope');
+  const [pkH, pkWave, pkFrom, pkOver] = [num(a.peaks, 'h', 'peaks.h'), num(a.peaks, 'wave', 'peaks.wave'), num(a.peaks, 'from', 'peaks.from'), num(a.peaks, 'over', 'peaks.over')];
+  const [crH, crWave, crFrom, crOver] = [num(a.crags, 'h', 'crags.h'), num(a.crags, 'wave', 'crags.wave'), num(a.crags, 'from', 'crags.from'), num(a.crags, 'over', 'crags.over')];
+  const crFine = a.crags.fine ?? 0.35;
+  if (!(crFine >= 0 && crFine <= 1)) fail('alpine.crags.fine: 0 to 1');
+  const rb = a.ribs;
+  const [rbM, rbWave, rbFrom, rbOver] = rb ? [num(rb, 'm', 'ribs.m'), num(rb, 'wave', 'ribs.wave'), num(rb, 'from', 'ribs.from'), num(rb, 'over', 'ribs.over')] : [0, 1, 0, 1];
+  // The wall must still rise all the way in: a rib taken on faster than a metre a metre would cut a trench at its foot.
+  if (rb && !(rbM >= 0 && rbWave > 0 && rbFrom >= 0 && rbOver > 1.5 * rbM)) fail('alpine.ribs: m and from at least 0, wave over 0, over more than 1.5 m');
+  const massifs = [];
+  for (const [k, m] of (a.massifs || []).entries()) {
+    const what = `alpine.massifs ${k}`;
+    if (!Array.isArray(m.from) || !Array.isArray(m.to) || m.from.length !== 2 || m.to.length !== 2) fail(`${what}: from and to are [x, z]`);
+    const crest = pchip(m.crest, fail, `${what}.crest`), half = pchip(m.half, fail, `${what}.half`);
+    const flank = m.flank ?? [0, 1];
+    if (!Array.isArray(flank) || flank.length !== 2 || !(flank[0] >= 0 && flank[0] < flank[1] && flank[1] <= 1)) fail(`${what}.flank: [a, b], 0 ≤ a < b ≤ 1`);
+    for (const [sx, sz] of images(m.mirror)) {
+      const [ax, az, bx, bz] = [m.from[0] * sx, m.from[1] * sz, m.to[0] * sx, m.to[1] * sz];
+      const L = dist(bx - ax, bz - az);
+      if (!(L > 0)) fail(`${what}: from and to are two places`);
+      massifs.push({ ax, az, ux: (bx - ax) / L, uz: (bz - az) / L, L, crest, half, flank, crags: m.crags ?? 0 });
+    }
+  }
+  let lake = null;
+  if (a.lake) {
+    const b = a.lake.box;
+    if (!Array.isArray(b) || b.length !== 4 || !(b[0] < b[2] && b[1] < b[3])) fail('alpine.lake.box: [x0, z0, x1, z1]');
+    const r = num(a.lake, 'round', 'lake.round');
+    if (!(r >= 0 && 2 * r <= Math.min(b[2] - b[0], b[3] - b[1]))) fail('alpine.lake.round: 0 to half its smaller side');
+    lake = { cx: (b[0] + b[2]) / 2, cz: (b[1] + b[3]) / 2, hx: (b[2] - b[0]) / 2 - r, hz: (b[3] - b[1]) / 2 - r, r, y: num(a.lake, 'y', 'lake.y'), shore: num(a.lake, 'shore', 'lake.shore') };
+    if (!(lake.shore > 0)) fail('alpine.lake.shore: over 0');
+  }
+  /** How far (x, z) is outside a rounded rectangle about (cx, cz): negative inside. */
+  const rounded = (x, z, cx, cz, hx, hz, r) => {
+    const qx = Math.abs(x - cx) - hx, qz = Math.abs(z - cz) - hz;
+    return dist(Math.max(qx, 0), Math.max(qz, 0)) + Math.min(Math.max(qx, qz), 0) - r;
+  };
+  const seam = a.seam;
+  if (seam !== undefined && !(seam > 0)) fail('alpine.seam: over 0');
+  /** Where the noise is read for x, and how much of it there is there. */
+  const nx = (x) => (seam ? Math.abs(x) : x);
+  const amp = (x) => (seam ? fade(clamp01(Math.abs(x) / seam)) : 1);
+  const warp = (x, z) => {
+    const k = amp(x), sx = seam && x < 0 ? -1 : 1;
+    return [x + sx * k * wM * fbm(nx(x), z, K(2), 1 / wWave, wOct), z + k * wM * fbm(nx(x), z, K(3), 1 / wWave, wOct)];
+  };
+  /** How far past the cliff's foot (x, z) is: negative on the floor. */
+  const past = (x, z) => {
+    const [xw, zw] = warp(x, z);
+    let e = rounded(xw, zw, 0, 0, rimHalf[0] - rimRound, rimHalf[1] - rimRound, rimRound);
+    for (const [bx, bz, r, w] of bays) e -= w * fall(dist(x - bx, z - bz), r);
+    return e;
+  };
+  // Two octaves, each turned off the lattice (a 3-4-5 turn, then its mirror): a ridged field on the axes draws streets.
+  const crag = (x, z) => {
+    const [xw0, zw] = warp(x, z);
+    const xw = nx(xw0);
+    const [ax, az] = [0.8 * xw - 0.6 * zw, 0.6 * xw + 0.8 * zw], [bx, bz] = [0.6 * xw + 0.8 * zw, 0.8 * xw - 0.6 * zw];
+    const fine = crWave * 0.4;
+    return amp(x) * crH * ((1 - crFine) * ridged(ax / crWave, az / crWave, K(6)) + crFine * ridged(bx / fine, bz / fine, K(8)));
+  };
+  // Ribs: the face read further in or further out along the wall, so buttresses stand out of it and couloirs are let into it.
+  // The ridged field's sharp line is the couloir's (a cleft a gully lies in), its broad swell the buttress's.
+  const rib = (x, z, e) => {
+    if (!rbM) return 0;
+    const [xw0, zw] = warp(x, z);
+    const xw = nx(xw0);
+    const [ax, az] = [0.6 * xw - 0.8 * zw, 0.8 * xw + 0.6 * zw];
+    // Only ever out: a cleft keeps the wall's own line, so no rib lowers a rim that holds a flier in.
+    return amp(x) * rbM * 2 * (1 - ridged(ax / rbWave, az / rbWave, K(9))) * fade(clamp01((e - rbFrom) / rbOver));
+  };
+  const wall = (x, z, e0) => {
+    if (e0 < -screeW) return 0;
+    if (e0 < 0) return screeH * fade((e0 + screeW) / screeW);
+    const e = e0 + rib(x, z, e0);
+    const h = e < cliffTop ? cliff(e) : topH + slope * (e - cliffTop);
+    const [px, pz] = [0.8 * nx(x) + 0.6 * z, 0.8 * z - 0.6 * nx(x)];
+    return h + crag(x, z) * fade(clamp01((e - crFrom) / crOver)) + amp(x) * pkH * fbm(px, pz, K(7), 1 / pkWave, 3) * fade(clamp01((e - pkFrom) / pkOver));
+  };
+  const massif = (x, z) => {
+    let h = 0;
+    for (const m of massifs) {
+      const rx = x - m.ax, rz = z - m.az;
+      const u = Math.min(Math.max(rx * m.ux + rz * m.uz, 0), m.L);
+      const d = dist(rx - u * m.ux, rz - u * m.uz), w = m.half(u);
+      if (d >= w) continue;
+      const f = 1 - fade(clamp01((d / w - m.flank[0]) / (m.flank[1] - m.flank[0])));
+      // Crags on its flanks, none on its crest or at its foot.
+      h += m.crest(u) * f + m.crags * crag(x, z) * 4 * f * (1 - f);
+    }
+    return h;
+  };
+  const lakeOut = (x, z) => (lake ? rounded(x, z, lake.cx, lake.cz, lake.hx, lake.hz, lake.r) : Infinity);
+  return {
+    /** The ground before the shapes: the floor's drifts, the massifs and the rim, the lake let into them. */
+    land(base, x, z) {
+      const e = past(x, z);
+      // The drifts die away up the scree: the wall is its own relief.
+      const h = base + amp(x) * dH * fbm(nx(x), z, K(1), 1 / dWave, dOct) * (1 - fade(clamp01((e + screeW) / screeW))) + massif(x, z) + wall(x, z, e);
+      const d = lakeOut(x, z);
+      if (d >= lake?.shore || !lake) return h;
+      return h + (lake.y - h) * (1 - fade(clamp01(d / lake.shore)));
+    },
+    /** How far (x, z) stands outside where a boulder may lie (negative inside): off the wall, off the ice and its shore. */
+    outside(x, z) {
+      return Math.max(past(x, z) + screeW * 0.5, lake ? lake.shore - lakeOut(x, z) : -Infinity);
+    },
+  };
+}
+
 /** A terrain block rasterised: vertex heights in 1/HEIGHT_Q m, a sampler
  * of them, and what the rocks planner keeps clear of. */
 function heightfield(t, [bx0, bx1, bz0, bz1], mirrors, sea, fail) {
@@ -858,6 +1047,7 @@ function heightfield(t, [bx0, bx1, bz0, bz1], mirrors, sea, fail) {
   // bases' pads.
   const creeks = [];
   const padDiscs = [];
+  const padRects = [];
   for (const [k, s] of (t.shapes || []).entries()) {
     const imgs = [[1, 1]].concat(s.mirror ? mirrors.map(([sx, sz]) => [sx, sz]) : []);
     for (const [sx, sz] of imgs) {
@@ -893,21 +1083,42 @@ function heightfield(t, [bx0, bx1, bz0, bz1], mirrors, sea, fail) {
           return raw + (h - raw) * (1 - fade(clamp01((d - r) / blend)));
         });
         padDiscs.push([px, pz, r + blend]);
-      } else fail(`terrain shape ${k}: a hill, a ridge, a plateau, an outline or a pad`);
+      } else if (s.level) {
+        const [p0, q0, p1, q1] = s.level, h = s.h;
+        // One blend all round, or one a side as written ([-x, +x, -z, +z]), swapped with the mirror.
+        const bl = typeof s.blend === 'number' ? [s.blend, s.blend, s.blend, s.blend] : s.blend;
+        if (!(p0 < p1 && q0 < q1) || typeof h !== 'number' || !Array.isArray(bl) || bl.length !== 4 || bl.some((v) => !(v > 0)))
+          fail(`terrain shape ${k}: a level needs [x0, z0, x1, z1], h and blend > 0 (or [-x, +x, -z, +z])`);
+        const [xa, xb] = [p0 * sx, p1 * sx].sort((a, b) => a - b), [za, zb] = [q0 * sz, q1 * sz].sort((a, b) => a - b);
+        const [bxa, bxb] = sx < 0 ? [bl[1], bl[0]] : [bl[0], bl[1]], [bza, bzb] = sz < 0 ? [bl[3], bl[2]] : [bl[2], bl[3]];
+        padsOf.push((x, z, raw) => {
+          // Each side's reach in its own blend: 1 where that side's ends.
+          const d = dist(Math.max((xa - x) / bxa, 0, (x - xb) / bxb), Math.max((za - z) / bza, 0, (z - zb) / bzb));
+          if (d >= 1) return raw;
+          return raw + (h - raw) * (1 - fade(d));
+        });
+        padRects.push([xa - bxa, za - bza, xb + bxb, zb + bzb]);
+      } else fail(`terrain shape ${k}: a hill, a ridge, a plateau, an outline, a pad or a level`);
     }
   }
   let gen = null;
   if (t.gen !== undefined) {
-    if (t.gen !== 'canyon') fail(`terrain: gen "${t.gen}": "canyon" or none`);
-    gen = canyon(t.canyon, sea, fail);
+    if (t.gen === 'canyon') gen = canyon(t.canyon, sea, fail);
+    else if (t.gen === 'alpine') gen = alpine(t.alpine, mirrors, fail);
+    else fail(`terrain: gen "${t.gen}": "canyon", "alpine" or none`);
   }
   const base = t.base ?? 0;
   const heights = [];
   for (let j = 0; j < nz; j++) {
     for (let i = 0; i < nx; i++) {
       const x = x0 + i * cell, z = z0 + j * cell;
-      let h = shapes.reduce((a, f) => a + f(x, z), base);
-      if (gen) h = gen.shelf(gen.terrace(h + gen.relief(x, z), x), x);
+      let h;
+      // The mountains first, the shapes laid over them (an islet stands on the ice).
+      if (gen && gen.land) h = shapes.reduce((a, f) => a + f(x, z), gen.land(base, x, z));
+      else {
+        h = shapes.reduce((a, f) => a + f(x, z), base);
+        if (gen) h = gen.shelf(gen.terrace(h + gen.relief(x, z), x), x);
+      }
       for (const p of padsOf) h = p(x, z, h);
       const q = Math.round(h * HEIGHT_Q);
       if (q < -32768 || q > 32767) fail(`terrain: ${h} m at ${x}, ${z} is out of range`);
@@ -925,7 +1136,7 @@ function heightfield(t, [bx0, bx1, bz0, bz1], mirrors, sea, fail) {
     const h00 = h(i, j), h10 = h(i + 1, j), h01 = h(i, j + 1), h11 = h(i + 1, j + 1);
     return fu >= fv ? h00 + (h10 - h00) * fu + (h11 - h10) * fv : h00 + (h11 - h01) * fu + (h01 - h00) * fv;
   };
-  return { cell, x0, z0, nx, nz, heights, ground, gen, creeks, padDiscs };
+  return { cell, x0, z0, nx, nz, heights, ground, gen, creeks, padDiscs, padRects };
 }
 
 // ------------------------------------------------------------ the boulders
@@ -1110,6 +1321,7 @@ function planRocks(rk, keep, t, sea, mirrors, [bx0, bx1, bz0, bz1], fail) {
     if (keep.boxes.some((b) => boxDist(b.box, x, z) < r + clr.box)) return false;
     if (keep.solids.some((s) => (s.kind === 'ramp' ? boxDist([s.rect[0], 0, s.rect[1], s.rect[2], 0, s.rect[3]], x, z) < r + clr.tree : near(s.x, s.z, (s.r ?? Math.max(s.hx, s.hz)) + clr.tree)))) return false;
     if (t.padDiscs.some(([px, pz, pr]) => near(px, pz, pr + clr.base))) return false;
+    if (t.padRects.some((b) => boxDist([b[0], 0, b[1], b[2], 0, b[3]], x, z) < r + clr.base)) return false;
     if (t.creeks.some(([ax, az, qx, qz, w]) => segDist(ax, az, qx, qz, x, z) < r + w + clr.creek)) return false;
     return true;
   };

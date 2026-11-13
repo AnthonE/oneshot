@@ -47,6 +47,9 @@ pub const SPEED_STEPS: f32 = 20.0;
 pub const SHELTER_CLEAR_M: f32 = 5.0;
 /// How far up something over the eye counts as a roof, metres.
 pub const SHELTER_UP_M: f32 = 12.0;
+/// How finely a roof's extent is found from under it, and how far out, m.
+const ROOF_STEP_M: f32 = 2.5;
+const ROOF_REACH_M: f32 = 60.0;
 
 /// Snow (`Mood::snow`): how fast it comes down, m/s, how far the wind takes it, a
 /// flake's length and width, m, how opaque at its middle, and how bright it's lit.
@@ -75,7 +78,7 @@ pub const FAR_SNOW_CLEAR_M: f32 = 6.0;
 /// A streak of rain: how wide, how opaque at its middle.
 pub const RAIN_WIDTH_M: f32 = 0.012;
 pub const RAIN_ALPHA: f32 = 0.4;
-/// The uniform, laid out to match `Rain` in the shader. 64 bytes: WebGL2
+/// The uniform, laid out to match `Rain` in the shader. 80 bytes: WebGL2
 /// wants uniforms of at least 16.
 #[derive(Clone, Copy, Default, ShaderType, Debug, PartialEq)]
 pub struct RainParams {
@@ -89,6 +92,10 @@ pub struct RainParams {
     /// x a streak's width (m), y its opacity at its middle, z 1 for a round
     /// flake (snow), 0 for a streak; w the shelter's clear radius when under one.
     pub shape: Vec4,
+    /// The roof the eye stands under, as a box in the plan (x0, z0, x1, z1):
+    /// nothing falls inside it. Empty (all zero) in the open. A hall is
+    /// wider than any radius round the eye: snow fell in a hangar's far end.
+    pub roof: Vec4,
 }
 
 #[derive(Asset, AsBindGroup, TypePath, Clone, Debug)]
@@ -145,6 +152,7 @@ pub fn far_for(m: &Mood, roofed: bool) -> RainParams {
         box_: FAR_SNOW_BOX_HALF.extend(near.box_.w),
         look: near.look,
         shape: Vec4::new(FAR_SNOW_WIDTH_M, FAR_SNOW_ALPHA, 1.0, FAR_SNOW_CLEAR_M),
+        roof: Vec4::ZERO,
     }
 }
 
@@ -205,6 +213,7 @@ pub fn params_for(m: &Mood, roofed: bool) -> RainParams {
             box_: SNOW_BOX_HALF.extend(if roofed { 0.0 } else { (m.rain * SNOW_COUNT).min(1.0) }),
             look: Vec4::new(SNOW_LIT, SNOW_LIT, SNOW_LIT * 1.04, 0.0),
             shape: Vec4::new(SNOW_WIDTH_M, SNOW_ALPHA, 1.0, SNOW_SHELTER_CLEAR_M),
+            roof: Vec4::ZERO,
         };
     }
     let wind = m.wind() * (1.0 + 0.6 * m.wind_ms);
@@ -217,6 +226,7 @@ pub fn params_for(m: &Mood, roofed: bool) -> RainParams {
         box_: BOX_HALF.extend(if roofed { 0.0 } else { m.rain }),
         look: Vec4::new(0.55 * lit, 0.58 * lit, 0.62 * lit, 0.0),
         shape: Vec4::new(RAIN_WIDTH_M, RAIN_ALPHA, 0.0, SHELTER_CLEAR_M),
+        roof: Vec4::ZERO,
     }
 }
 
@@ -244,6 +254,7 @@ pub fn setup(mut commands: Commands, mut meshes: ResMut<Assets<Mesh>>, mut mater
 
 /// The map's rain, when the map changes, and its shelter when the eye goes
 /// under a roof or out from one (the map's own boxes, as the sim has them).
+#[allow(clippy::too_many_arguments)]
 pub fn drive(
     now: Res<MoodNow>,
     handle: Option<Res<RainHandle>>,
@@ -252,27 +263,37 @@ pub fn drive(
     link: NonSend<crate::LinkRes>,
     eye: Query<&GlobalTransform, With<super::rig::EyeCam>>,
     mut sheltered: Local<bool>,
+    mut roof: Local<Option<(Vec2, Vec2)>>,
 ) {
     let mut want = params_for(&now.mood, now.roofed);
     let mut far = far_for(&now.mood, now.roofed);
     let show = want.box_.w > 0.0;
-    let under = show
-        && eye.single().is_ok_and(|g| {
-            let p = g.translation();
-            let up = sim::geom::V3::new(0.0, 1.0, 0.0);
-            link.0
-                .session()
-                .core
-                .map
-                .ray(sim::geom::V3::new(p.x, p.y, p.z), up, SHELTER_UP_M)
-                < SHELTER_UP_M
-        });
-    if !now.is_changed() && under == *sheltered {
+    let map = &link.0.session().core.map;
+    let at = eye.single().ok().map(|g| g.translation());
+    let under = show && at.is_some_and(|p| covered(map, p.x, p.y, p.z));
+    // The roof it stands under, found again when the eye leaves the last one's box.
+    let mut moved = false;
+    match (under, at) {
+        (true, Some(p)) => {
+            let inside = roof.is_some_and(|(lo, hi)| p.x > lo.x && p.x < hi.x && p.z > lo.y && p.z < hi.y);
+            if !inside {
+                *roof = Some(roof_over(map, p));
+                moved = true;
+            }
+        }
+        _ => {
+            moved = roof.take().is_some();
+        }
+    }
+    if !now.is_changed() && under == *sheltered && !moved {
         return;
     }
     *sheltered = under;
     want.look.w = if under { want.shape.w } else { 0.0 };
     far.look.w = if under { far.shape.w } else { 0.0 };
+    let r = roof.map_or(Vec4::ZERO, |(lo, hi)| Vec4::new(lo.x, lo.y, hi.x, hi.y));
+    want.roof = r;
+    far.roof = r;
     let Some(handle) = handle else {
         return;
     };
@@ -294,6 +315,52 @@ pub fn drive(
             }
         }
     }
+}
+
+/// Whether (x, z) at height `y` is under cover: something built over it
+/// within [`SHELTER_UP_M`].
+pub(crate) fn covered(map: &sim::map::Map, x: f32, y: f32, z: f32) -> bool {
+    map.ray(
+        sim::geom::V3::new(x, y, z),
+        sim::geom::V3::new(0.0, 1.0, 0.0),
+        SHELTER_UP_M,
+    ) < SHELTER_UP_M
+}
+
+/// The roof over `p`, as a box in the plan: round every place joined to
+/// `p` under cover at its height, by steps of [`ROOF_STEP_M`] out to
+/// [`ROOF_REACH_M`], never through a wall or into the ground (a door's far
+/// side is open sky, and stops it).
+fn roof_over(map: &sim::map::Map, p: Vec3) -> (Vec2, Vec2) {
+    let n = (ROOF_REACH_M / ROOF_STEP_M) as i32;
+    let side = (2 * n + 1) as usize;
+    let mut seen = vec![false; side * side];
+    seen[n as usize * side + n as usize] = true;
+    let mut queue = vec![(0i32, 0i32)];
+    let (mut lo, mut hi) = (Vec2::new(p.x, p.z), Vec2::new(p.x, p.z));
+    while let Some((i, j)) = queue.pop() {
+        let here = Vec2::new(p.x + i as f32 * ROOF_STEP_M, p.z + j as f32 * ROOF_STEP_M);
+        lo = lo.min(here);
+        hi = hi.max(here);
+        for (di, dj) in [(1, 0), (-1, 0), (0, 1), (0, -1)] {
+            let (a, b) = (i + di, j + dj);
+            if a.abs() > n || b.abs() > n {
+                continue;
+            }
+            let k = (b + n) as usize * side + (a + n) as usize;
+            if seen[k] {
+                continue;
+            }
+            seen[k] = true;
+            let (x, z) = (p.x + a as f32 * ROOF_STEP_M, p.z + b as f32 * ROOF_STEP_M);
+            let open = map.ground(x, z) < p.y && !map.occupied(x, z, 0.1, p.y - 0.1, p.y + 0.1);
+            if open && covered(map, x, p.y, z) {
+                queue.push((a, b));
+            }
+        }
+    }
+    let m = Vec2::splat(ROOF_STEP_M * 0.5);
+    (lo - m, hi + m)
 }
 
 /// What the rain's wet does to a box's material: darker, and more

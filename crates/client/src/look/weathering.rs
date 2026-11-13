@@ -54,6 +54,11 @@ pub struct WeatherParams {
     pub shaft_lo: Vec4,
     pub shaft_hi: Vec4,
     pub shaft_tint: Vec4,
+    /// The hall the block stands in or bounds ([`Block::hall`]), its box
+    /// let out [`HALL_OUT_M`] so a wall's inner face is well inside it;
+    /// `hall_hi.w` 0: none.
+    pub hall_lo: Vec4,
+    pub hall_hi: Vec4,
 }
 
 /// A block's shaft lanes, to compare with `shafts::WebShafts`.
@@ -102,6 +107,19 @@ pub struct Block {
     /// a solid does not, since an arc's turned segments overlap at their
     /// ends and two values on one plane would flicker.
     pub own_value: bool,
+    /// Whether its top is open to the sky (nothing built over its middle):
+    /// where snow settles on a map that snows.
+    pub open: bool,
+    /// The hall it stands in or bounds, as a box (lo, hi), on a map whose
+    /// halls the sky does not light (a snowed valley's hangars).
+    pub hall: Option<(Vec3, Vec3)>,
+    /// Which of its sides have a floor at their foot, as bits (+x 1, -x 2,
+    /// +z 4, -z 8, in its own frame): where snow can lie against it. All
+    /// four on the ground; a parapet on a deck's edge has it on its deck's
+    /// side only. Over those, a bit for each side its top's floor carries on
+    /// past (16, 32, 64, 128): the wind bares a snowed top's lip on the
+    /// others.
+    pub foot: u8,
 }
 
 /// The ground's samples along a long block ([`Block::run`]).
@@ -157,12 +175,26 @@ const SOIL: [f32; 3] = [0.62, 0.55, 0.47];
 /// else; linear albedo, inside the dull band. **(knob)**
 const SAND_DUST: [f32; 3] = [0.42, 0.29, 0.19];
 const GREY_DUST: [f32; 3] = [0.3, 0.29, 0.27];
+/// Snow settled on what faces up under an open sky, in a valley that
+/// snows (`level::Land::Alpine`): a step under the ground's own snow, and
+/// how much of a top it takes (the patches between are scoured bare).
+const SNOW_SETTLE: [f32; 3] = [0.8, 0.81, 0.83];
+const SNOW_SETTLE_SHARE: f32 = 1.0;
 /// How far one block's value may sit from the next, either way.
 const BLOCK_VALUE: f32 = 0.07;
 /// How far up the grime reaches from the ground, m.
 const GRIME_REACH_M: f32 = 1.3;
 /// Under a roof there is less dust and no weather to carry it off.
 const ROOFED_DUST: f32 = 0.6;
+/// How far a hall's box is let out in the plan: past its walls' inner
+/// faces by more than the shader's fade, short of the thinnest wall's far
+/// face (a facade is a metre and a half through).
+const HALL_OUT_M: f32 = 0.75;
+/// What grime at a block's foot multiplies by where snow lies against it:
+/// wet and cold, not the canyon's soil.
+const COLD_GRIME: [f32; 3] = [0.42, 0.46, 0.52];
+/// And how strong it is on a snowed valley's cast concrete.
+const SNOWY_GRIME: f32 = 0.75;
 
 /// How a surface weathers.
 #[derive(Clone, Copy, Debug)]
@@ -231,8 +263,9 @@ pub fn block_value(mid: Vec3) -> f32 {
 }
 
 /// The uniform for a block of `surface`: `dusty` outdoors on a dusty map,
-/// `roofed` under a roof.
-pub fn params(surface: Surface, b: &Block, dusty: bool, roofed: bool) -> WeatherParams {
+/// `roofed` under a roof, `snowy` in a valley that snows (its open tops
+/// carry snow, not dust).
+pub fn params(surface: Surface, b: &Block, dusty: bool, roofed: bool, snowy: bool) -> WeatherParams {
     let Recipe {
         mottle,
         streak,
@@ -244,8 +277,21 @@ pub fn params(surface: Surface, b: &Block, dusty: bool, roofed: bool) -> Weather
         rough,
         dust,
     } = recipe(surface);
-    let dust_rgb = if dusty && !roofed { SAND_DUST } else { GREY_DUST };
-    let dust = if roofed { dust * ROOFED_DUST } else { dust };
+    let settles = snowy && b.open && !roofed;
+    let dust_rgb = if settles {
+        SNOW_SETTLE
+    } else if dusty && !roofed {
+        SAND_DUST
+    } else {
+        GREY_DUST
+    };
+    let dust = if settles {
+        SNOW_SETTLE_SHARE
+    } else if roofed {
+        dust * ROOFED_DUST
+    } else {
+        dust
+    };
     let shape = match b.shape {
         Shape::Box => 1.0,
         Shape::Round => 2.0,
@@ -253,10 +299,15 @@ pub fn params(surface: Surface, b: &Block, dusty: bool, roofed: bool) -> Weather
     };
     WeatherParams {
         mottle: Vec4::new(mottle, 0.65, 0.17, if b.own_value { block_value(b.mid) } else { 1.0 }),
-        streak: Vec4::new(streak, 2.2, 0.0, 0.0),
+        streak: Vec4::new(streak, 2.2, if settles { 1.0 } else { 0.0 }, f32::from(b.foot)),
         streak_tint: Vec4::new(tint[0], tint[1], tint[2], 0.0),
         grime: Vec4::new(
-            grime,
+            // A snowed valley's concrete is damp and dark over the snow at its foot.
+            if snowy && surface == Surface::Stone {
+                SNOWY_GRIME
+            } else {
+                grime
+            },
             GRIME_REACH_M,
             b.ground,
             match b.run {
@@ -265,14 +316,30 @@ pub fn params(surface: Surface, b: &Block, dusty: bool, roofed: bool) -> Weather
                 Some((Run::Z, _)) => 2.0,
             },
         ),
-        grime_tint: Vec4::new(SOIL[0], SOIL[1], SOIL[2], 0.0),
+        grime_tint: if snowy {
+            Vec4::new(COLD_GRIME[0], COLD_GRIME[1], COLD_GRIME[2], 0.0)
+        } else {
+            Vec4::new(SOIL[0], SOIL[1], SOIL[2], 0.0)
+        },
         wear: Vec4::new(dust, wear, width, lift),
         dust_tint: Vec4::new(dust_rgb[0], dust_rgb[1], dust_rgb[2], rough),
         centre: b.mid.extend(shape),
         half: b.half.extend(f32::from(b.hidden)),
-        turn: Vec4::new(b.turn.0, b.turn.1, if seal(b) { 1.0 } else { 0.0 }, 0.0),
+        // A snowed valley's stone is its bases' cast concrete: in panels.
+        turn: Vec4::new(
+            b.turn.0,
+            b.turn.1,
+            if seal(b) { 1.0 } else { 0.0 },
+            if snowy && surface == Surface::Stone { 2.0 } else { 0.0 },
+        ),
         ground_run: b.run.map_or([Vec4::splat(b.ground); 2], |(_, g)| {
             [Vec4::new(g[0], g[1], g[2], g[3]), Vec4::new(g[4], g[5], g[6], g[7])]
+        }),
+        hall_lo: b.hall.map_or(Vec4::ZERO, |(lo, _)| {
+            Vec4::new(lo.x - HALL_OUT_M, lo.y, lo.z - HALL_OUT_M, 0.0)
+        }),
+        hall_hi: b.hall.map_or(Vec4::ZERO, |(_, hi)| {
+            Vec4::new(hi.x + HALL_OUT_M, hi.y, hi.z + HALL_OUT_M, 1.0)
         }),
         // Painted in by `shafts::paint_web` where WebGL2 marches.
         ..default()
@@ -290,11 +357,18 @@ pub fn seal(b: &Block) -> bool {
 }
 
 /// `base` weathered as a block of `surface`.
-pub fn material(base: StandardMaterial, surface: Surface, b: &Block, dusty: bool, roofed: bool) -> LevelMaterial {
+pub fn material(
+    base: StandardMaterial,
+    surface: Surface,
+    b: &Block,
+    dusty: bool,
+    roofed: bool,
+    snowy: bool,
+) -> LevelMaterial {
     ExtendedMaterial {
         base,
         extension: Weathering {
-            params: params(surface, b, dusty, roofed),
+            params: params(surface, b, dusty, roofed, snowy),
         },
     }
 }
@@ -328,6 +402,9 @@ mod tests {
             run: None,
             hidden: 0,
             own_value: true,
+            open: true,
+            hall: None,
+            foot: 0b1111,
         }
     }
 
@@ -338,7 +415,7 @@ mod tests {
     fn the_stains_stay_in_the_band() {
         for s in ALL {
             for (dusty, roofed) in [(false, false), (true, false), (true, true)] {
-                let p = params(s, &block(), dusty, roofed);
+                let p = params(s, &block(), dusty, roofed, false);
                 assert!(p.mottle.x > 0.0 && p.mottle.x < 0.25, "{s:?}");
                 assert!(p.streak_tint.truncate().max_element() <= 1.0, "{s:?}");
                 assert!(p.grime_tint.truncate().max_element() <= 1.0, "{s:?}");

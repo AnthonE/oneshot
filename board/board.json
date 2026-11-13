@@ -1272,6 +1272,214 @@
           "private": true
         }
       ]
+    },
+    {
+      "id": "hd-ice_base",
+      "name": "Icefall: red's base from its forecourt",
+      "what": "the facade in the mountain's foot from the top of its apron, twenty-three metres off: the hangar's door and the south door, the drifts against the wall between them, the cliff over them",
+      "take": "a base built into a mountain: a concrete front with three doors under a wall of rock and snow, the side's colour round its hangar door, snow drifted against it",
+      "shoot": [
+        "tools/hd.sh"
+      ],
+      "png": "traces/hd/ice_base.png",
+      "refs": [
+        {
+          "file": "icefall/vault-portal-drift.jpg",
+          "take": "concrete poured in boards: panel joints and tie holes, dark streaks run down from its top edge; snow drifted high against the wall and banked round the door, never a clean line where wall meets ground; a steel grating before the door; a lit sign the one warm thing",
+          "ignore": "the place itself: a real photograph for light, colour, texture and weather, never a plan",
+          "source": "https://commons.wikimedia.org/wiki/Special:FilePath/Svalbard%20Global%20Seed%20Vault%20February%202025.jpg?width=1280",
+          "licence": "CC BY-SA 2.0, Michael Major for Crop Trust",
+          "private": true
+        },
+        {
+          "file": "icefall/vault-wall-snow.jpg",
+          "take": "a portal that reads as a made thing in the cold: a tall dark louvred door in a frame, the wall in courses of panels, stained darker low down where the snow lies against it; the ground beside it snow with stones showing through",
+          "ignore": "the place itself: a real photograph for light, colour, texture and weather, never a plan",
+          "source": "https://commons.wikimedia.org/wiki/Special:FilePath/Svalbard%20Global%20Seed%20Vault%20Exterior%202020.jpg?width=1280",
+          "licence": "CC BY-SA 2.0, Cierra Martin for Crop Trust",
+          "private": true
+        }
+      ]
+    },
+    {
+      "id": "hd-ice_hangar",
+      "name": "Icefall: in red's hangar",
+      "what": "the hangar from inside its main door, toward the flag's dais at the back",
+      "take": "a hall cut into rock: lamps, a floor that has been driven on, the flag's dais and what stands round it",
+      "shoot": [
+        "tools/hd.sh"
+      ],
+      "png": "traces/hd/ice_hangar.png",
+      "refs": [
+        {
+          "file": "icefall/vault-tunnel.jpg",
+          "take": "a hall in concrete: walls in formwork panels with tie holes and pour lines, mottled grey; warm lamps on the walls and cold light at the far end, both lying on a floor worn to a sheen down its middle; a steel stair, pipes and cable trays under the roof; depth read by lamps repeating into the distance",
+          "ignore": "the place itself: a real photograph for light, colour, texture and weather, never a plan",
+          "source": "https://commons.wikimedia.org/wiki/Special:FilePath/Svalbard%20Global%20Seed%20Vault%2C%20tunnel%20down%20to%20the%20vault%20-%20panoramio.jpg?width=1280",
+          "licence": "CC BY 3.0, Dag Endresen",
+          "private": true
+        }
+      ]
+    },
+    {
+      "id": "hd-ice_terrace",
+      "name": "Icefall: off red's terrace",
+      "what": "from the terrace's lip at the gap in its parapet over the main door, looking north along it: the lip and the forecourt straight down beside it, the parapet running on ahead, the north spur, the lake running off under the north wall",
+      "take": "a height to defend from: the parapet near, the forecourt and its spurs below, the lake going off into the air",
+      "shoot": [
+        "tools/hd.sh"
+      ],
+      "png": "traces/hd/ice_terrace.png",
+      "refs": [
+        {
+          "file": "icefall/hooker-ice.jpg",
+          "take": "the valley beyond a height: a sheet of ice paler and smoother than the snow round it, blue-grey in shade, a hard shoreline; mountains white on top and dark rock where they stand, each further ridge a step paler",
+          "ignore": "the place itself: a real photograph for light, colour, texture and weather, never a plan",
+          "source": "https://commons.wikimedia.org/wiki/Special:FilePath/Frozen%20Hooker%20Glacier%20Lake%20and%20Hooker%20Glacier%20in%20winter%20with%20Mount%20Cook%20in%20the%20background.jpg?width=1280",
+          "licence": "Public domain",
+          "private": true
+        },
+        {
+          "file": "icefall/vault-wall-snow.jpg",
+          "take": "the concrete underfoot and at the parapet: panels and joints, snow lying in the corners and against the upstand",
+          "ignore": "the place itself: a real photograph for light, colour, texture and weather, never a plan",
+          "source": "https://commons.wikimedia.org/wiki/Special:FilePath/Svalbard%20Global%20Seed%20Vault%20Exterior%202020.jpg?width=1280",
+          "licence": "CC BY-SA 2.0, Cierra Martin for Crop Trust",
+          "private": true
+        }
+      ]
+    },
+    {
+      "id": "hd-ice_lake",
+      "name": "Icefall: the lake from red's north gate",
+      "what": "the frozen lake from its west end: the islets, the skerry, the north wall over it",
+      "take": "ice a truck would cross flat out: snow blown over it, islets of rock, pressure ridges, a wall of mountain beyond",
+      "shoot": [
+        "tools/hd.sh"
+      ],
+      "png": "traces/hd/ice_lake.png",
+      "refs": [
+        {
+          "file": "icefall/hooker-shore.jpg",
+          "take": "ice against snow: the lake a smooth pale grey-blue sheet with cracks and frozen-in lumps, a clear curved shore, the snow beside it brighter and rougher with boulders and dry tufts showing through; white mountains with dark rock bands under a deep clear sky",
+          "ignore": "the place itself: a real photograph for light, colour, texture and weather, never a plan",
+          "source": "https://commons.wikimedia.org/wiki/Special:FilePath/View%20down%20to%20shore%20of%20frozen%20Hooker%20Glacier%20Lake%20in%20winter.jpg?width=1280",
+          "licence": "Public domain",
+          "private": true
+        },
+        {
+          "file": "icefall/louise-face.jpg",
+          "take": "the wall over the ice: dark rock in level beds, snow lying on every ledge and down the gullies, fans of snow at its foot streaked by slides; the lake's snow flat and tracked",
+          "ignore": "the place itself: a real photograph for light, colour, texture and weather, never a plan",
+          "source": "https://commons.wikimedia.org/wiki/Special:FilePath/Lake%20Louise%20and%20Mountains.jpg?width=1280",
+          "licence": "CC0",
+          "private": true
+        }
+      ]
+    },
+    {
+      "id": "hd-ice_col",
+      "name": "Icefall: red's massif from the col",
+      "what": "red's massif from the south knoll, across the moraine's lane: its sheer south flank at an angle with its foot on the floor, the way up its spine as its skyline, the perch on its crest",
+      "take": "a rock that parts the lanes: faces nobody climbs, snow on its top, the way up its spine",
+      "shoot": [
+        "tools/hd.sh"
+      ],
+      "png": "traces/hd/ice_col.png",
+      "refs": [
+        {
+          "file": "icefall/louise-face.jpg",
+          "take": "a face nobody climbs: dark rock broken into beds and buttresses, thin lines of snow on its ledges, a snow cap on top and a fan of snow at its foot; the rock reads as rock at this distance, never a mottle of two colours",
+          "ignore": "the place itself: a real photograph for light, colour, texture and weather, never a plan",
+          "source": "https://commons.wikimedia.org/wiki/Special:FilePath/Lake%20Louise%20and%20Mountains.jpg?width=1280",
+          "licence": "CC0",
+          "private": true
+        }
+      ]
+    },
+    {
+      "id": "hd-ice_perch",
+      "name": "Icefall: red's base from its perch",
+      "what": "from the lip of the perch on red's massif back to its base: the spine falling away, the forecourt, the facade, the mountain it is built in to its crest",
+      "take": "how small the base is under its mountain, and everything between laid out",
+      "shoot": [
+        "tools/hd.sh"
+      ],
+      "png": "traces/hd/ice_perch.png",
+      "refs": [
+        {
+          "file": "icefall/sefton-moraine.jpg",
+          "take": "from a height over a valley: snow in the sun and blue in the shade, rock showing dark through it on what is steep, the far wall whole and bright, the ground below a litter of dark stones in the snow",
+          "ignore": "the place itself: a real photograph for light, colour, texture and weather, never a plan",
+          "source": "https://commons.wikimedia.org/wiki/Special:FilePath/Mt%20Sefton%20and%20The%20Footstool%20behind%20frozen%20Mueller%20Glacier%20Lake%20in%20winter.jpg?width=1280",
+          "licence": "Public domain",
+          "private": true
+        },
+        {
+          "file": "icefall/louise-face.jpg",
+          "take": "the mountain over the base: beds of dark rock with snow on the ledges, a snow fan down to the foot",
+          "ignore": "the place itself: a real photograph for light, colour, texture and weather, never a plan",
+          "source": "https://commons.wikimedia.org/wiki/Special:FilePath/Lake%20Louise%20and%20Mountains.jpg?width=1280",
+          "licence": "CC0",
+          "private": true
+        }
+      ]
+    },
+    {
+      "id": "hd-ice_moraine",
+      "name": "Icefall: the moraine from red's south gate",
+      "what": "the south lane from the top of red's first drumlin: the hollow below, boulders and snags, the snow shed along the wall's foot",
+      "take": "broken ground to fight across: rises to drive round, rock to stand behind, bare trees, the wall's shade over it",
+      "shoot": [
+        "tools/hd.sh"
+      ],
+      "png": "traces/hd/ice_moraine.png",
+      "refs": [
+        {
+          "file": "icefall/hooker-shore.jpg",
+          "take": "broken ground under snow: boulders of every size showing dark through it, dry tufts, the snow thin on the rises and deep in the hollows, footprints; the far wall white with dark bands",
+          "ignore": "the place itself: a real photograph for light, colour, texture and weather, never a plan",
+          "source": "https://commons.wikimedia.org/wiki/Special:FilePath/View%20down%20to%20shore%20of%20frozen%20Hooker%20Glacier%20Lake%20in%20winter.jpg?width=1280",
+          "licence": "Public domain",
+          "private": true
+        },
+        {
+          "file": "icefall/sefton-moraine.jpg",
+          "take": "a moraine in shade under a sunlit wall: the shade blue and full of dark stones, the sun on the snow beyond it warm white",
+          "ignore": "the place itself: a real photograph for light, colour, texture and weather, never a plan",
+          "source": "https://commons.wikimedia.org/wiki/Special:FilePath/Mt%20Sefton%20and%20The%20Footstool%20behind%20frozen%20Mueller%20Glacier%20Lake%20in%20winter.jpg?width=1280",
+          "licence": "Public domain",
+          "private": true
+        }
+      ]
+    },
+    {
+      "id": "hd-ice_over",
+      "name": "Icefall: from the air",
+      "what": "the valley from over its south-west corner, across the sun: both massifs with their shaded sides, the col's station between them, the lake beyond, the north wall to its crest",
+      "take": "the valley read at a glance: three lanes, two massifs, the col between",
+      "shoot": [
+        "tools/hd.sh"
+      ],
+      "png": "traces/hd/ice_over.png",
+      "refs": [
+        {
+          "file": "icefall/burroughs-air.jpg",
+          "take": "the land read from the air: snow on what lies flat, dark on what stands, long hard shadows giving every rise its shape, dark timber gathered in the hollows",
+          "ignore": "the place itself: a real photograph for light, colour, texture and weather, never a plan",
+          "source": "https://commons.wikimedia.org/wiki/Special:FilePath/View%20from%20over%20Burroughs%20Mountain%2C%20looking%20across%20Sunrise%20Park%20with%20block%20houses%20and%20day%20lodge%20visible.%20Frozen%20Lake%20is%20frozen%20%283ffc9693481c425ab043123f2cd60ca0%29.jpg?width=1280",
+          "licence": "Public domain",
+          "private": true
+        },
+        {
+          "file": "icefall/sefton-moraine.jpg",
+          "take": "a valley floor from above: ice in its low ground, stones through the snow, the wall beyond in full light",
+          "ignore": "the place itself: a real photograph for light, colour, texture and weather, never a plan",
+          "source": "https://commons.wikimedia.org/wiki/Special:FilePath/Mt%20Sefton%20and%20The%20Footstool%20behind%20frozen%20Mueller%20Glacier%20Lake%20in%20winter.jpg?width=1280",
+          "licence": "Public domain",
+          "private": true
+        }
+      ]
     }
   ]
 }

@@ -58,6 +58,40 @@ const ROCK: [f32; 3] = [0.30, 0.15, 0.08];
 const ROCK_PALE: [f32; 3] = [0.40, 0.26, 0.16];
 const SCRUB: [f32; 3] = [0.17, 0.19, 0.08];
 const AIR: [f32; 3] = [0.50, 0.62, 0.80];
+/// Under snow (a valley whose mood snows, `level::Land::Alpine`): the cold
+/// rock of its faces and a paler bed in it, snow on what lies flat, and a
+/// paler air to go into.
+/// And its shape: not mesas but a range, leaving the terrain's edge at the
+/// wall's own height (`SNOW_EDGE_Y`, under its crest) and climbing
+/// `SNOW_RISE_M` by `SNOW_RISE_OVER_M` out in masses `SNOW_RANGE_M` across,
+/// with summits `SNOW_PEAK_H` over that on ridges `SNOW_PEAK_M` apart: from
+/// the valley's floor the wall's crest stands 30° up, and what is behind
+/// it shows only what it has over that.
+const SNOW_EDGE_Y: f32 = 92.0;
+const SNOW_RISE_M: f32 = 230.0;
+const SNOW_RISE_OVER_M: (f32, f32) = (10.0, 560.0);
+const SNOW_RANGE_M: f32 = 420.0;
+const SNOW_PEAK_H: f32 = 170.0;
+const SNOW_PEAK_M: f32 = 300.0;
+/// Its rings: a range's ridges are a few hundred metres apart, and rings as
+/// far apart as the mesas' drew them as saddles and its summits as needles.
+const SNOW_RINGS_M: [f32; 18] = [
+    -6.0, 15.0, 40.0, 70.0, 105.0, 145.0, 190.0, 240.0, 300.0, 370.0, 450.0, 540.0, 640.0, 760.0, 900.0, 1100.0,
+    1350.0, 1700.0,
+];
+/// Snow lies on it where the valley's own walls hold it (the normal's y,
+/// from none to whole: 57° to 46°); the mesas' scrub rule (37°) left a
+/// range bare rock. Its rock shows in beds every `SNOW_BED_M` up. The
+/// valley's mist is over it already: its own air is `SNOW_HAZE`, and its
+/// snow a step bluer than the wall's cap in front of it, which stays the
+/// brightest thing on that skyline.
+const SNOW_LIES: (f32, f32) = (0.6, 0.78);
+const SNOW_BED_M: f32 = 38.0;
+const SNOW_HAZE: f32 = 0.45;
+const SNOW_ROCK: [f32; 3] = [0.10, 0.11, 0.14];
+const SNOW_ROCK_PALE: [f32; 3] = [0.20, 0.22, 0.27];
+const SNOW: [f32; 3] = [0.86, 0.88, 0.93];
+const SNOW_AIR: [f32; 3] = [0.70, 0.78, 0.90];
 const HAZE: f32 = 0.62;
 const HAZE_M: f32 = 1500.0;
 
@@ -80,7 +114,20 @@ fn smooth(a: f32, b: f32, x: f32) -> f32 {
 /// The far land's height at (x, z), `out` metres past the terrain's edge,
 /// on a map whose bound toward the sea is at x `sea_x` (the water at
 /// `sea`; not finite: no sea).
-pub fn height(x: f32, z: f32, out: f32, sea_x: f32, sea: f32, seed: u32) -> f32 {
+pub fn height(x: f32, z: f32, out: f32, sea_x: f32, sea: f32, seed: u32, snow: bool) -> f32 {
+    if snow {
+        // A range under snow: broad masses, sharp summits along their ridges.
+        let climb = smooth(SNOW_RISE_OVER_M.0, SNOW_RISE_OVER_M.1, out);
+        let n = 0.65 * noise(x / SNOW_RANGE_M, z / SNOW_RANGE_M, seed)
+            + 0.35
+                * noise(
+                    x / (SNOW_RANGE_M * 0.41) + 9.0,
+                    z / (SNOW_RANGE_M * 0.41) + 4.0,
+                    seed ^ 0x5bd1,
+                );
+        let r = 1.0 - (2.0 * noise(x / SNOW_PEAK_M + 3.0, z / SNOW_PEAK_M + 7.0, seed ^ 0x9e37) - 1.0).abs();
+        return SNOW_EDGE_Y + SNOW_RISE_M * climb * (0.25 + 0.75 * n) + SNOW_PEAK_H * r * r * climb;
+    }
     let climb = smooth(RISE_OVER_M.0, RISE_OVER_M.1, out);
     // Mesas: two octaves, cut into terraces with a short scarp between.
     let n = 0.65 * noise(x / MESA_M, z / MESA_M, seed)
@@ -99,11 +146,17 @@ pub fn height(x: f32, z: f32, out: f32, sea_x: f32, sea: f32, seed: u32) -> f32 
 }
 
 /// The mesh round a terrain whose rectangle is `lo..hi` (its own edge, past
-/// the playable bound).
-pub fn mesh(lo: Vec2, hi: Vec2, sea_x: f32, sea: f32, seed: u32) -> Mesh {
+/// the playable bound); `snow`: under snow, in its colours.
+pub fn mesh(lo: Vec2, hi: Vec2, sea_x: f32, sea: f32, seed: u32, snow: bool) -> Mesh {
+    let (rock_c, pale_c, flat_c, air_c) = if snow {
+        (SNOW_ROCK, SNOW_ROCK_PALE, SNOW, SNOW_AIR)
+    } else {
+        (ROCK, ROCK_PALE, SCRUB, AIR)
+    };
     let mid = (lo + hi) * 0.5;
     let half = (hi - lo) * 0.5;
-    let rings = RINGS_M.len();
+    let ring_at: &[f32] = if snow { &SNOW_RINGS_M } else { &RINGS_M };
+    let rings = ring_at.len();
     let mut pos: Vec<Vec3> = Vec::with_capacity(SPOKES * rings);
     let mut outs = Vec::with_capacity(SPOKES * rings);
     for s in 0..SPOKES {
@@ -111,9 +164,13 @@ pub fn mesh(lo: Vec2, hi: Vec2, sea_x: f32, sea: f32, seed: u32) -> Mesh {
         let dir = Vec2::new(a.cos(), a.sin());
         // Where this spoke leaves the rectangle.
         let edge = (half.x / dir.x.abs().max(1e-4)).min(half.y / dir.y.abs().max(1e-4));
-        for &out in &RINGS_M {
+        for &out in ring_at {
             let p = mid + dir * (edge + out);
-            pos.push(Vec3::new(p.x, height(p.x, p.y, out.max(0.0), sea_x, sea, seed), p.y));
+            pos.push(Vec3::new(
+                p.x,
+                height(p.x, p.y, out.max(0.0), sea_x, sea, seed, snow),
+                p.y,
+            ));
             outs.push(out.max(0.0));
         }
     }
@@ -135,14 +192,25 @@ pub fn mesh(lo: Vec2, hi: Vec2, sea_x: f32, sea: f32, seed: u32) -> Mesh {
             let (p, n) = (pos[i], nor[i]);
             // Scrub on what lies flat, rock on what stands, a pale bed
             // every sixty metres up.
-            let flat = smooth(0.80, 0.94, n.y);
-            let bed = smooth(0.55, 0.9, noise(p.y / 60.0, (p.x + p.z) / 900.0, 0x0bed));
+            let (flat, bed, air) = if snow {
+                (
+                    smooth(SNOW_LIES.0, SNOW_LIES.1, n.y),
+                    smooth(0.45, 0.75, noise(p.y / SNOW_BED_M, (p.x + p.z) / 900.0, 0x0bed)),
+                    SNOW_HAZE,
+                )
+            } else {
+                (
+                    smooth(0.80, 0.94, n.y),
+                    smooth(0.55, 0.9, noise(p.y / 60.0, (p.x + p.z) / 900.0, 0x0bed)),
+                    HAZE,
+                )
+            };
             let mut c = [0.0f32; 3];
             for k in 0..3 {
-                let rock = ROCK[k] + (ROCK_PALE[k] - ROCK[k]) * bed;
-                let ground = rock + (SCRUB[k] - rock) * flat;
-                let haze = HAZE * smooth(0.0, HAZE_M, outs[i]);
-                c[k] = ground + (AIR[k] - ground) * haze;
+                let rock = rock_c[k] + (pale_c[k] - rock_c[k]) * bed;
+                let ground = rock + (flat_c[k] - rock) * flat;
+                let haze = air * smooth(0.0, HAZE_M, outs[i]);
+                c[k] = ground + (air_c[k] - ground) * haze;
             }
             [c[0], c[1], c[2], 1.0]
         })
@@ -184,10 +252,11 @@ pub fn spawn(
     sea_x: f32,
     sea: f32,
     seed: u32,
+    snow: bool,
 ) {
     commands.spawn((
         LevelPart,
-        Mesh3d(meshes.add(mesh(lo, hi, sea_x, sea, seed))),
+        Mesh3d(meshes.add(mesh(lo, hi, sea_x, sea, seed, snow))),
         MeshMaterial3d(mats.add(StandardMaterial {
             base_color: Color::WHITE,
             perceptual_roughness: 1.0,
@@ -211,22 +280,39 @@ mod tests {
     fn it_climbs_away_from_the_rim_and_sinks_toward_the_sea() {
         let (sea_x, sea) = (150.0, -6.0);
         // At the edge, inland: the rim's level.
-        assert!((height(-300.0, 0.0, 0.0, sea_x, sea, 3) - EDGE_Y).abs() < 1.0);
+        assert!((height(-300.0, 0.0, 0.0, sea_x, sea, 3, false) - EDGE_Y).abs() < 1.0);
         // Far out, inland: high, somewhere.
         let far = (0..40)
-            .map(|i| height(-900.0 - 7.0 * i as f32, 120.0 * (i % 5) as f32, 800.0, sea_x, sea, 3))
+            .map(|i| {
+                height(
+                    -900.0 - 7.0 * i as f32,
+                    120.0 * (i % 5) as f32,
+                    800.0,
+                    sea_x,
+                    sea,
+                    3,
+                    false,
+                )
+            })
             .fold(f32::MIN, f32::max);
         assert!(far > 250.0, "the far land tops out at {far}");
         // Out to sea, and at the terrain's own edge off the beach: under it.
-        assert!(height(sea_x + 400.0, 0.0, 300.0, sea_x, sea, 3) < sea);
-        assert!(height(sea_x + 54.0, 20.0, 0.0, sea_x, sea, 3) < sea);
+        assert!(height(sea_x + 400.0, 0.0, 300.0, sea_x, sea, 3, false) < sea);
+        assert!(height(sea_x + 54.0, 20.0, 0.0, sea_x, sea, 3, false) < sea);
         // No sea, no sinking.
-        assert!(height(900.0, 0.0, 800.0, sea_x, f32::NEG_INFINITY, 3) > EDGE_Y);
+        assert!(height(900.0, 0.0, 800.0, sea_x, f32::NEG_INFINITY, 3, false) > EDGE_Y);
     }
 
     #[test]
     fn the_mesh_rings_the_terrain() {
-        let m = mesh(Vec2::new(-200.0, -108.0), Vec2::new(210.0, 108.0), 150.0, -6.0, 3);
+        let m = mesh(
+            Vec2::new(-200.0, -108.0),
+            Vec2::new(210.0, 108.0),
+            150.0,
+            -6.0,
+            3,
+            false,
+        );
         let Some(bevy::mesh::VertexAttributeValues::Float32x3(p)) = m.attribute(Mesh::ATTRIBUTE_POSITION) else {
             panic!("no positions");
         };

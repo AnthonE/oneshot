@@ -569,6 +569,7 @@ fn app_on(link: Box<dyn Link>, opts: Opts, first: Screen) -> App {
     .add_plugins(look::craft::plugin)
     .add_plugins(look::cloud_sea::plugin)
     .add_plugins(look::isle_stone::plugin)
+    .add_plugins(look::snow_stone::plugin)
     .add_plugins(look::pool::plugin)
     // The grass's and the clutter's wind, trails and fade (`look/foliage.rs`).
     .add_plugins(look::foliage::plugin)
@@ -1386,7 +1387,8 @@ fn rebuild(
     );
     if let Ok((mut exposure, mut env, fills)) = eye.single_mut() {
         if let Some(d) = sim::maps::ALL.iter().find(|d| d.id == s.map_id) {
-            look::rig::expose_for(&d.light, &mood.mood, fills, &mut exposure, &mut env);
+            let snowed = level::Land::of(d) == level::Land::Alpine;
+            look::rig::expose_for(&d.light, &mood.mood, snowed, fills, &mut exposure, &mut env);
         }
     }
     // Every rung's shade reaches across this map (`look/quality.rs`).
