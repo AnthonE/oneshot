@@ -414,7 +414,7 @@ const SCENES = [
     kick(c.lt, 14, .3);
     const a = ramp(c.lt, .05, .15) * (1 - ramp(c.lt, c.d - .1, c.d));
     const s = lerp(1.15, 1, E.expo(ramp(c.lt, 0, .3)));
-    pool(fg, W / 2, 500, 700, .35 * a);
+    pool(fg, W / 2, 500, 760, .6 * a);
     text(fg, c.label, W / 2, 530, { size: 116, track: 12, scale: s, alpha: a, shadow: 30 });
     const rs = rv(L, .1, .3, .15);
     text(fg, 'THREE WAYS ACROSS', W / 2, 1035, { kind: 'ail', size: 30, weight: 700, color: C.gold, track: 8, alpha: rs.a });
@@ -434,7 +434,8 @@ const SCENES = [
     craftCard(L, 'THE FLIER', 'fl-hero', FLY_LINES, { from: FROM['fl-hero'], glow: 'rgba(232,185,49,.14)' });
   } },
   { id: 'f2-roll', at: grid(19), box: true, draw(L) {
-    foot(bg, 'fl-roll', L.t, L.d, { from: FROM['fl-roll'], grade: 'contrast(1.06) saturate(1.06)' });
+    const c = cutAt(ROLL, L.t, L.d);
+    foot(bg, c.name, c.lt, c.d, { from: c.from, speed: ROLL[c.k][3], grade: 'contrast(1.06) saturate(1.06)' });
     low();
     caption(L, ['TAKE THE HIGH GROUND.', 'ALL OF IT.'], { y: 760, size: 80, at: .2, step: .5, track: 6 });
   } },
@@ -511,16 +512,20 @@ for (let i = 0; i < SCENES.length; i++) { SCENES[i].t0 = SCENES[i].at; SCENES[i]
 const at = id => SCENES.find(s => s.id === id).t0;
 // Where in each clip a scene starts (seconds), read off its frames: the
 // shot lists give each a little run-up, and the moment is cut to the beat.
-const FROM = { 'fl-launch': .3, 'sk-lake': .3, 'fl-hero': .2, 'ice-reveal': .2, 'sk-hero': .2, 'sk-boost': .2, 'fl-roll': .2, 'pit-map': .2, 'pit-out': .2 };
+const FROM = { 'fl-launch': .3, 'sk-lake': .3, 'fl-hero': .2, 'ice-reveal': .2, 'sk-hero': .2, 'sk-boost': .2, 'pit-map': .2, 'pit-out': .5 };
 // The fight's two cuts, then the ramp's, each shorter than the last into the drop.
 const FIGHTS = [[0, 'fl-guns', .3], [2.14, 'sk-guns', .3]];
-const RAMP = [[0, 'fl-pov', .3], [1.07, 'sk-pov', .3], [1.87, 'fl-dive', .3], [2.47, 'sk-boost', 1.4], [2.94, 'fl-roll', 1.2], [3.34, 'sk-guns', 1.8], [3.74, 'fl-guns', 2.0]];
+const RAMP = [[0, 'fl-pov', .3], [1.07, 'sk-pov', .3], [1.87, 'fl-dive', .3], [2.47, 'sk-boost', 1.4], [2.94, 'fl-roll', 2.2], [3.34, 'sk-guns', 1.8], [3.74, 'fl-guns', 2.0]];
+// The flier low over the lake: its follow swings close and blurs between
+// these two, which are cut out ([seconds into the scene, clip, from, speed]).
+const ROLL = [[0, 'fl-roll', 0, 1], [1.25, 'fl-roll', 1.72, .95]];
 // Icefall's three ways across, a beat each.
 const WAYS = [[0, 'ice-lake', .2, 'THE FROZEN LAKE'], [1.068, 'ice-moraine', .2, 'THE MORAINE'], [2.136, 'ice-col', .2, 'THE COL']];
 // Big Team: a truck, then the craft over it.
 const BIGTEAM = [[0, 'ice-bt', .2], [1.6, 'ice-bt-2', .2]];
-// Pithead's fight: over the shoulder to a head shot, then a walk off the gantry.
-const PIT = [[0, 'pit-fight', .2], [2.136, 'pit-fall', .2]];
+// Pithead's fight over the shoulder (up the lift at red's shed), the sheave
+// deck turning to red's crown, and down the shaft, which carries into the relit bed.
+const PIT = [[0, 'pit-fight', .9], [1.7, 'pit-sheave', 1.4], [3.3, 'pit-out', .1]];
 // Every map relit, a beat each after the slam.
 const RELIT = [[0, 'relit-overpass', .1, 'OVERPASS'], [1.068, 'relit-bulkhead', .1, 'BULKHEAD'], [2.136, 'relit-dryfork', .1, 'DRY FORK'],
   [3.204, 'relit-cistern', .1, 'CISTERN'], [4.272, 'relit-proving', .1, 'PROVING GROUNDS']];
@@ -564,7 +569,8 @@ const CUES = {
     ...RAMP.map(([t, name, from], i) => game(name, ramp0 + t, (RAMP[i + 1] ? RAMP[i + 1][0] : DROP - ramp0) - t, from, .8)),
     game('ice-reveal', at('i1-icefall'), at('i2-ways') - at('i1-icefall'), FROM['ice-reveal'], .4),
     game('sk-boost', at('k2-boost'), at('f1-flier') - at('k2-boost'), FROM['sk-boost'], .75),
-    game('fl-roll', at('f2-roll'), at('b1-bigteam') - at('f2-roll'), FROM['fl-roll'], .75),
+    game('fl-roll', at('f2-roll'), ROLL[1][0], ROLL[0][2], .75),
+    game('fl-roll', at('f2-roll') + ROLL[1][0], at('b1-bigteam') - at('f2-roll') - ROLL[1][0], ROLL[1][2], .75),
     ...BIGTEAM.map(([t, name, from], i) => game(name, at('b1-bigteam') + t, (BIGTEAM[i + 1] ? BIGTEAM[i + 1][0] : at('p1-pithead') - at('b1-bigteam')) - t, from, .65)),
     game('pit-map', at('p1-pithead'), at('p2-shaft') - at('p1-pithead'), FROM['pit-map'], .5),
     ...PIT.map(([t, name, from], i) => game(name, at('p2-shaft') + t, (PIT[i + 1] ? PIT[i + 1][0] : at('l1-relit') - at('p2-shaft')) - t, from, .7)),

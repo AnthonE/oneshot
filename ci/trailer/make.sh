@@ -145,7 +145,7 @@ cp "$S/music/intro.ogg" "$B/music/"
 for s in shot_sniper_0 shot_sniper_far_0 headshot_0 headshot_1 shield_pop_0 shield_hit_0 kill_0 death_0 scope_in_0 scope_out_0 \
          shot_br_0 shot_br_1 shot_ar_0 shot_rifle_0 shot_magnum_0 shot_shotgun_0 shot_rocket_0 shot_smg_0 sword_swing_0 sword_on_0 \
          sword_swing_1 shot_carbine_0 shot_beam_0 shot_ion_0 shot_ionp_0 shot_ion_charged_0 shot_shards_0 shot_launcher_0 shot_cannon_0 shot_minigun_0 \
-         blast_0 blast_1 rocket_fly_0 reload_br_0 reload_sniper_0 swap_0 swap_1 pickup_0 pickup_1 launch_0 jump_0 land_0 \
+         blast_0 blast_1 rocket_fly_0 reload_br_0 reload_sniper_0 swap_0 swap_1 pickup_0 pickup_1 launch_0 jump_0 land_0 land_1 \
          engine_0 ride_0 ride_1 skid_0 crash_0 truck_land_0 flyby_0 flyby_1 flyby_2 ricochet_0 bullet_metal_0 impact_metal_0 melee_hit_0 \
          bolt_hit_0 bolt_hit_1 shot_ionp_1 surf_0 step_rock_0 step_gravel_0 \
          match_found_0 go_0 ui_click_0 ui_hover_0 tick_0 over_on_0 camo_on_0 spawn_0 sticky_stick_0 grenades_0 throw_0 \
