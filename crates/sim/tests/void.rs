@@ -73,7 +73,6 @@ fn island() -> Def {
         dress_solids: &[],
         profiles: &[],
         dress_profiles: &[],
-        nav: false,
         light: LightDef::DAY,
         flags: &[],
         siege: &[],

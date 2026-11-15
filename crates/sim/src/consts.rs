@@ -132,6 +132,11 @@ pub const SHIELD_RATE: i32 = 60;
 /// Health comes back once shields are full.
 pub const HEALTH_RATE: i32 = 30;
 pub const RESPAWN_MS: u32 = 3000;
+/// Capture the Flag's, longer (Halo's CTF respawns are: a run with the
+/// flag has the time to get home), and longer again on a Big Team map,
+/// where home is farther (`Rules::respawn_ms`).
+pub const CTF_RESPAWN_MS: u32 = 8000;
+pub const BIG_CTF_RESPAWN_MS: u32 = 10_000;
 /// On a map with a void (`Map::void`): a fall is the kill of whoever last
 /// hurt the faller, if it was within this long on the faller's feet. The
 /// clock stops in the air, so a blast that throws a body off an edge is
@@ -558,18 +563,17 @@ pub const BOOST_REFILL: u16 = 1;
 pub const BOMB_MS: u32 = 2600;
 
 // Capture the Flag.
-/// How near (flat) a fighter must come to a flag to take, return or score
-/// it, and how far above or below.
+/// How near (flat) a fighter must come to a flag to take or score it, and
+/// how far above or below.
 pub const FLAG_REACH: f32 = 1.2;
 pub const FLAG_RISE: f32 = 2.0;
-/// A flag left on the floor goes home on its own after this, untouched
-/// (Halo 3's reset; an enemy's hand on it starts it again).
-pub const FLAG_RESET_MS: u32 = 30_000;
-/// A defender standing by their own flag on the floor takes it home in
-/// this long (Halo 3's return); each more of them in reach, up to
-/// `FLAG_RETURNERS`, adds their own pace; an enemy in reach holds it.
-pub const FLAG_RETURN_MS: u32 = 15_000;
-pub const FLAG_RETURNERS: u32 = 3;
+/// A flag on the floor goes home on its own after this, and only so: no
+/// touch return, its defenders can only stand over it (competitive Halo
+/// 2's, 15 s; Reach's Big Team reset, 30 s, on a Big Team map:
+/// `Rules::flag_reset_ms`). Taken up and dropped again, its clock starts
+/// again.
+pub const FLAG_RESET_MS: u32 = 15_000;
+pub const BIG_FLAG_RESET_MS: u32 = 30_000;
 /// A carrier's pace: Halo 2's "slow with flag". Why a carrier juggles it
 /// (drops it ahead and runs on at full speed to take it up again).
 pub const FLAG_PACE: f32 = 0.85;

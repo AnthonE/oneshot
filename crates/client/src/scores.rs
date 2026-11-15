@@ -642,7 +642,7 @@ pub fn board(
     if st.board != held {
         st.board = held;
     }
-    let dead = s.ready && !over && hud::boarded(s.core.own().0);
+    let dead = s.ready && !over && hud::boarded(s.core.own().0, &s.core.rules);
     let up = s.ready && (st.board || dead || (over && st.carnage.is_empty()));
     if let Ok(mut v) = panel.single_mut() {
         v.set_if_neq(if up { Visibility::Inherited } else { Visibility::Hidden });

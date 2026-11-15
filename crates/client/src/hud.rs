@@ -1414,9 +1414,9 @@ pub fn on_events(
 }
 
 /// Dead long enough for the scoreboard ([`DEAD_BOARD_S`]), on the
-/// respawn's own clock.
-pub(crate) fn boarded(f: &sim::fighter::Fighter) -> bool {
-    let gone = sim::consts::ticks(sim::consts::RESPAWN_MS).saturating_sub(u32::from(f.respawn));
+/// respawn's own clock (the mode's: `Rules::respawn_ms`).
+pub(crate) fn boarded(f: &sim::fighter::Fighter, rules: &sim::world::Rules) -> bool {
+    let gone = sim::consts::ticks(rules.respawn_ms()).saturating_sub(u32::from(f.respawn));
     !f.alive && gone as f32 >= DEAD_BOARD_S * TICK_HZ as f32
 }
 

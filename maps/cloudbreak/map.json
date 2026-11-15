@@ -6,7 +6,6 @@
   "bounds": [-31, 31, -27, 28],
   "void": -10,
   "mirror": "x",
-  "nav": true,
   "terrain": {
     "cell": 1,
     "base": -40,

@@ -172,7 +172,6 @@ pub const DEF: Def = Def {
     ],
     dress_profiles: &[
     ],
-    nav: true,
     flags: &[],
     siege: &[],
     light: crate::map::LightDef {

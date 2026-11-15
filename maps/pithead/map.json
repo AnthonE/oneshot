@@ -6,7 +6,6 @@
  "bounds": [-24, 24, -17, 17],
  "void": -10,
  "mirror": "turn",
- "nav": true,
  "terrain": {
   "cell": 1, "base": -40, "margin": 4,
   "shapes": [

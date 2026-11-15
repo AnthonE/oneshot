@@ -84,7 +84,6 @@ pub const DEF: Def = Def {
     ],
     dress_profiles: &[
     ],
-    nav: false,
     flags: &[],
     siege: &[],
     light: crate::map::LightDef::DAY,

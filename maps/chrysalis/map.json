@@ -4,7 +4,6 @@
   "about": "Inside a ship's purple hold, on three decks, mirrored red (-x) to blue (+x). The keel (y 0): a round pit under the chrysalis, ramps up out of it north and south, a low run east and west to the room under each pod. The main deck (y 3.5): 58 by 52 m, round at both ends with an apse north and south, the pit's hole in its middle; to the north a pierced arcade between the pit and the lane, to the south an open plaza. The top (y 7): top mid a saucer of a ring hung from the vault round the chrysalis' spine; bridges to the pods' roofs and to the pulpit in the south apse; a gallery over the arcade from roof to roof. A lift in each pod to its roof, one up from the pit to the ring on each side, one in the north apse to the gallery.",
   "bounds": [-29,29,-26,26],
   "mirror": "x",
-  "nav": true,
   "structures": [
     {
       "name": "the main deck: one annulus about the pit, out past the walls, a gap under each pod",
