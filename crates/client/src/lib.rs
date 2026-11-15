@@ -177,14 +177,14 @@ impl Built {
 }
 
 /// Drawn things by their slot (a fighter with the side and look its body
-/// was made in). Made once and kept: fog hiding someone hides their body or
-/// hull, it doesn't throw it away, so their coming back costs nothing (a
-/// skinned scene, its materials and shield shells, made mid-fight, was a
-/// hitch).
+/// was made in, a hull with the kind and turret it was made as). Made once
+/// and kept: fog hiding someone hides their body or hull, it doesn't throw
+/// it away, so their coming back costs nothing (a skinned scene, its
+/// materials and shield shells, made mid-fight, was a hitch).
 #[derive(Resource, Default)]
 struct Drawn {
     fighters: BTreeMap<u8, (Entity, u8, proto::Look)>,
-    vehicles: BTreeMap<u8, Entity>,
+    vehicles: BTreeMap<u8, (Entity, u8, u8)>,
 }
 
 #[derive(Component)]
@@ -1606,7 +1606,7 @@ fn draw_fighters(
         let grips = seat
             .filter(|(v, k)| v.kind == sim::vehicle::SKIMMER && *k == sim::vehicle::DRIVER)
             .and_then(|(v, _)| drawn.vehicles.get(&v.slot))
-            .and_then(|hull| crafts.get(*hull).ok());
+            .and_then(|hull| crafts.get(hull.0).ok());
         if let Some(craft) = grips {
             look::bodies::grip(e, craft.grips(), &mut bodies);
         }
@@ -1707,8 +1707,21 @@ fn draw_vehicles(
         ));
     }
     for &(slot, p, yaw, (kind, pitch, roll, boosting)) in list.iter() {
-        if let Some(&e) = drawn.vehicles.get(&slot) {
-            let _ = show(&mut vis, e, true);
+        // What its bed carries, on this map (or the pose's).
+        let turret = match posed.as_ref().map(|p| p.2.truck_turret) {
+            _ if kind != sim::vehicle::TRUCK => sim::vehicle::NO_TURRET,
+            Some(k) => k,
+            None => core.map.vehicles.get(slot as usize).map_or(0, |d| d.turret),
+        };
+        // A hull made for another map's slot (another kind, another bed:
+        // the next match is often on the other map) is made again.
+        if let Some(&(e, k, b)) = drawn.vehicles.get(&slot) {
+            if (k, b) == (kind, turret) {
+                let _ = show(&mut vis, e, true);
+            } else {
+                commands.entity(e).despawn();
+                drawn.vehicles.remove(&slot);
+            }
         }
         let sent = seen.iter().find(|v| v.slot == slot);
         let health = sent.map_or(255, |v| v.health);
@@ -1724,7 +1737,7 @@ fn draw_vehicles(
             // A one-seater: no wheels on the grass, its nose and roll its
             // own (`look/craft.rs`).
             match drawn.vehicles.get(&slot) {
-                Some(&e) => {
+                Some(&(e, ..)) => {
                     if let Ok(mut tr) = at.get_mut(e) {
                         tr.set_if_neq(t);
                     }
@@ -1735,7 +1748,7 @@ fn draw_vehicles(
                 None => {
                     let e = commands.spawn((t, Visibility::default(), Kept)).id();
                     look::craft::spawn(&mut commands, &mut meshes, &kit, &models, e, kind);
-                    drawn.vehicles.insert(slot, e);
+                    drawn.vehicles.insert(slot, (e, kind, turret));
                 }
             }
             // The dust its lift blows up, and a hurt hull's smoke.
@@ -1754,7 +1767,7 @@ fn draw_vehicles(
         }
         look::fx::hulls::roll(&mut fx, slot, p, yaw, health, time.delta_secs());
         match drawn.vehicles.get(&slot) {
-            Some(&e) => {
+            Some(&(e, ..)) => {
                 // A parked hull stays put: its wheels and body don't go
                 // round the transforms again.
                 if let Ok(mut tr) = at.get_mut(e) {
@@ -1771,16 +1784,12 @@ fn draw_vehicles(
                 let hull = look::truck::Hull { slot, health, driven };
                 let e = commands.spawn((t, Visibility::default(), Kept, hull)).id();
                 let body = look::truck::spawn(&mut commands, &models, e);
-                let kind = match posed.as_ref().map(|p| p.2.truck_turret) {
-                    Some(k) => k,
-                    None => core.map.vehicles.get(slot as usize).map_or(0, |d| d.turret),
-                };
-                look::turret::spawn(&mut commands, &turrets, &models, body, slot, kind);
-                drawn.vehicles.insert(slot, e);
+                look::turret::spawn(&mut commands, &turrets, &models, body, slot, turret);
+                drawn.vehicles.insert(slot, (e, kind, turret));
             }
         }
     }
-    for (slot, e) in &drawn.vehicles {
+    for (slot, (e, ..)) in &drawn.vehicles {
         if !list.iter().any(|v| v.0 == *slot) {
             let _ = show(&mut vis, *e, false);
         }

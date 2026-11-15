@@ -486,6 +486,38 @@ fn a_truck_drives_icefalls_ring() {
     assert!(secs < length / VEH_TOP * 1.6, "a lap of {length} m took {secs} s");
 }
 
+/// Icefall's hangar trucks face out of the main door: driven straight from
+/// where each comes back, it is out past the facade, its nose on no jamb (a
+/// bot drives at its goal, not round a post, and one parked there kept its
+/// gunner in the hangar).
+#[test]
+fn icefalls_hangar_trucks_drive_straight_out_the_door() {
+    let m = by_id(9).unwrap();
+    for (i, d) in m
+        .vehicles
+        .iter()
+        .enumerate()
+        .filter(|(_, d)| d.kind == sim::vehicle::TRUCK && fabs(d.pos.x) > 206.0)
+    {
+        let mut v = sim::vehicle::Vehicle {
+            active: true,
+            pos: d.pos,
+            yaw: d.yaw,
+            grounded: true,
+            health: VEH_HEALTH,
+            ..Default::default()
+        };
+        let ahead = Input {
+            mz: 127,
+            ..Input::default()
+        };
+        for _ in 0..TICK_HZ * 4 {
+            v.step_local(&ahead, &m);
+        }
+        assert!(fabs(v.pos.x) < 200.0, "vehicle {i} stopped at {:?}", v.pos);
+    }
+}
+
 /// Icefall's mountains are what hold a flier in, never its bounds: all
 /// along them the ground stands over the highest a flier climbs (its
 /// ceiling over the terrace it starts from).
