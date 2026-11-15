@@ -11,3 +11,6 @@ moodboard/
 # Downloads as they came: tools/models reads Meshy's raw meshes (sources/meshy)
 # and the truck from here
 /sources/
+
+# Agents' scratch worktrees
+.claude/worktrees/
