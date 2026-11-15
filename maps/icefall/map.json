@@ -253,7 +253,7 @@
     { "weapon": "sword", "at": [0, -74], "respawn": 120 }
   ],
   "vehicles": [
-    { "at": [-220, -7.5, 5], "yaw": 0, "respawn": 45, "turret": "minigun", "mirror": true },
+    { "at": [-220, -4.5, 5], "yaw": 0, "respawn": 45, "turret": "minigun", "mirror": true },
     { "at": [-199, -17], "yaw": 0, "respawn": 30, "mirror": true },
     { "at": [-198, 18], "yaw": 0, "respawn": 30, "kind": "skimmer", "mirror": true },
     { "at": [-234, 0, 12.62], "yaw": 0, "respawn": 90, "kind": "flier", "mirror": true }
