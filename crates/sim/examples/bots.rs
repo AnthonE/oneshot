@@ -3,7 +3,9 @@
 //! Game, 2 Big Team's Slayer, 4 Siege) on map `map`, and how the bots
 //! played it: flags taken, dropped, home and captured, kills, vehicles
 //! boarded and wrecked, and by job how long they stood still and spun
-//! there. What tells a change to the bots worked.
+//! there; in Siege (served as it is, its clock and score), each node's
+//! break, how long each ring rose, held and fell, and who stood in them.
+//! What tells a change to the bots worked.
 //!
 //! `DEBUG=1`: every flag event. `KILLS=1`: who killed whom, by job.
 //! `TRACE=seat,from_s,to_s`: that seat's every look. `TRUCK=i`: vehicle `i`
@@ -24,7 +26,7 @@ use sim::consts::*;
 use sim::events::Kind as Ev;
 use sim::geom::V3;
 use sim::input::Input;
-use sim::world::{Rules, World};
+use sim::world::{Rules, World, NO_WINNER};
 
 /// A job's name, without what it is about.
 fn name(j: Job) -> String {
@@ -76,18 +78,33 @@ fn main() {
         _ if def.big() => Rules::big_ctf(),
         _ => Rules::ctf(),
     };
-    let rules = Rules {
-        score_limit: 1000,
-        time_limit_ms: 0,
-        ..base
+    // Siege plays as it is served (its score, its clock, sudden death), so
+    // how a match ends shows; the rest never end.
+    let siege = base.siege;
+    let rules = if siege {
+        base
+    } else {
+        Rules {
+            score_limit: 1000,
+            time_limit_ms: 0,
+            ..base
+        }
     };
     let n = rules.seats as usize;
     let mut w = World::new(m, rules, seed, (seed ^ 1, seed ^ 2));
     let mut bots = [Bot::new(seed, 0, 0.5); MAX_FIGHTERS];
     for (s, b) in bots.iter_mut().enumerate().take(n) {
         w.seat(s, (s & 1) as u8);
-        *b = Bot::new(seed, s, BOT_SKILL);
+        *b = Bot::new(seed, s, if siege { SIEGE_BOT_SKILL } else { BOT_SKILL });
     }
+    // Siege: each node's broken (when, by whom), and seconds each node's
+    // ring stood rising, contested, falling; per side, seat-seconds in an
+    // enemy ring and in its own.
+    let mut broke: Vec<(f32, usize)> = Vec::new();
+    let mut held_s = [[0u32; 4]; SIEGE_NODES];
+    let mut in_ring_s = [[0u32; 2]; 2];
+    let (mut minion_kills, mut tower_kills) = (0u32, 0u32);
+    let mut ended: Option<f32> = None;
 
     let total = ticks(minutes * 60_000);
     let mut inputs = [Input::default(); MAX_FIGHTERS];
@@ -177,10 +194,50 @@ fn main() {
                 (Ev::Flag, 1) => dropped += 1,
                 (Ev::Flag, 2) => home += 1,
                 (Ev::Flag, 3) => caps[(e.b as usize & 1) ^ 1] += 1,
-                (Ev::Kill, _) => kills += 1,
+                (Ev::Kill, _) => {
+                    kills += 1;
+                    tower_kills += (e.a as usize >= n) as u32;
+                }
                 (Ev::Ride, _) if e.c == 0 => boarded += 1,
                 (Ev::Wreck, _) => wrecks += 1,
+                (Ev::Node, 0) => {
+                    broke.push((t as f32 / TICK_HZ as f32, e.b as usize));
+                    if debug {
+                        println!(
+                            "  node t={:.1}s {} broken, first in its ring seat {}",
+                            t as f32 / TICK_HZ as f32,
+                            e.b,
+                            e.a
+                        );
+                    }
+                }
+                (Ev::Minion, 0) if e.a != NO_WINNER => minion_kills += 1,
                 _ => {}
+            }
+        }
+        if siege && ended.is_none() && w.phase == sim::world::Phase::Over {
+            ended = Some(t as f32 / TICK_HZ as f32);
+            break;
+        }
+        if siege && t % TICK_HZ == 0 {
+            if let Some(at) = w.map.siege {
+                for (k, node) in w.nodes.iter().enumerate() {
+                    held_s[k][node.held as usize & 3] += 1;
+                }
+                for s in 0..n {
+                    let f = &w.fighters[s];
+                    if !f.active() || f.riding().is_some() {
+                        continue;
+                    }
+                    let mine = f.team as usize & 1;
+                    for (k, &p) in at.iter().enumerate() {
+                        let d = f.body.pos - p;
+                        if d.flat().len() < NODE_REACH && d.y.abs() < NODE_RISE {
+                            let theirs = World::node_side(k) != mine;
+                            in_ring_s[mine][theirs as usize] += 1;
+                        }
+                    }
+                }
             }
         }
         for s in 0..n {
@@ -230,6 +287,48 @@ fn main() {
         caps[0], caps[1]
     );
     println!("  kills {kills}, boarded {boarded}, wrecks {wrecks}");
+    if siege {
+        let side = |k: usize| if World::node_side(k) == 0 { "red" } else { "blue" };
+        let what = |k: usize| {
+            if World::is_core(k) {
+                "core".to_string()
+            } else {
+                format!("gen {}", k % (SIEGE_GENS + 1))
+            }
+        };
+        match ended {
+            Some(e) => println!(
+                "  siege: over at {:.0}s ({:.1} min), winner {}, score red {} blue {}",
+                e,
+                e / 60.0,
+                ["red", "blue"].get(w.winner as usize).unwrap_or(&"none"),
+                w.score[0],
+                w.score[1]
+            ),
+            None => println!(
+                "  siege: still on at the end, score red {} blue {}",
+                w.score[0], w.score[1]
+            ),
+        }
+        for (at, k) in &broke {
+            println!("    {:>6.0}s {}'s {} broken", at, side(*k), what(*k));
+        }
+        for (k, h) in held_s.iter().enumerate() {
+            println!(
+                "    {:>4} {:>5}: rising {:>4}s, contested {:>4}s, falling {:>4}s",
+                side(k),
+                what(k),
+                h[1],
+                h[2],
+                h[3]
+            );
+        }
+        println!(
+            "    seat-seconds in rings: red in blue's {} / own {}; blue in red's {} / own {}",
+            in_ring_s[0][1], in_ring_s[0][0], in_ring_s[1][1], in_ring_s[1][0]
+        );
+        println!("    minions killed by fighters {minion_kills}; fighters killed by towers or minions {tower_kills}");
+    }
     let (a, st, sp) = by_job.values().fold((0u64, 0u64, 0u64), |(a, b, c), &(x, y, z)| {
         (a + x as u64, b + y as u64, c + z as u64)
     });
