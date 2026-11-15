@@ -176,6 +176,26 @@ impl Rules {
         self.ctf || self.siege
     }
 
+    /// How long a fighter killed is down before it is back: Slayer's
+    /// quick, Capture the Flag's longer, Big Team's longer again.
+    pub fn respawn_ms(&self) -> u32 {
+        match (self.ctf, self.seats as usize > MAX_FIGHTERS / 2) {
+            (false, _) => RESPAWN_MS,
+            (true, false) => CTF_RESPAWN_MS,
+            (true, true) => BIG_CTF_RESPAWN_MS,
+        }
+    }
+
+    /// How long a flag lies on the floor before it goes home, the only way
+    /// it does ([`FLAG_RESET_MS`]).
+    pub fn flag_reset_ms(&self) -> u32 {
+        if self.seats as usize > MAX_FIGHTERS / 2 {
+            BIG_FLAG_RESET_MS
+        } else {
+            FLAG_RESET_MS
+        }
+    }
+
     /// The gun on rung `score` of Gun Game's ladder.
     pub fn rung(score: i32) -> u8 {
         let l = &crate::arms::LADDER;
@@ -341,9 +361,9 @@ pub const FLAG_DOWN: u8 = 2;
 /// tosses it ahead: nobody takes it till it lands, so a carrier can
 /// juggle it (drop, run on at full speed, take it up again), at the cost
 /// of having it on the floor. Scored when the carrier reaches its own
-/// base while its own flag is home. On the floor it goes home after
-/// [`FLAG_RESET_MS`] untouched, or sooner with defenders standing by it
-/// ([`FLAG_RETURN_MS`]) and no enemy in reach.
+/// base while its own flag is home. On the floor it goes home on its
+/// clock alone ([`Rules::flag_reset_ms`]): no touch return, so its
+/// defenders hold it where it lies.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct Flag {
     pub state: u8,
@@ -351,16 +371,12 @@ pub struct Flag {
     pub carrier: u8,
     /// Where it is: its base, its carrier's feet, or where it fell.
     pub pos: V3,
-    /// Ticks till a dropped flag goes home on its own.
-    pub down_for: u32,
     /// Down and still in the air (tossed, or falling from a carrier who
     /// died off the ground), at `vel`.
     pub flying: bool,
     pub vel: V3,
-    /// Ticks of defenders' return it has, of `ticks(FLAG_RETURN_MS)`.
-    pub ret: u32,
-    /// Ticks till it is home at the pace it is going now (its own clock,
-    /// or the defenders' return if that is sooner): what the HUD shows.
+    /// On the floor, ticks till it goes home on its own (what the HUD
+    /// shows).
     pub home_in: u32,
 }
 
@@ -373,10 +389,8 @@ impl Thing for Flag {
         h.u8(self.state);
         h.u8(self.carrier);
         h.v3(self.pos);
-        h.u32(self.down_for);
         h.bool(self.flying);
         h.v3(self.vel);
-        h.u32(self.ret);
         h.u32(self.home_in);
     }
 }
@@ -2584,7 +2598,7 @@ impl World {
         let toss = v.body.vel * DROP_CARRY + V3::new(0.0, DROP_TOSS, 0.0);
         v.body.vel = V3::ZERO;
         v.needles = 0;
-        v.respawn = ticks(RESPAWN_MS) as u16;
+        v.respawn = ticks(self.rules.respawn_ms()) as u16;
         v.deaths += 1;
         let vteam = v.team;
         let pos = v.body.pos;
@@ -2649,8 +2663,7 @@ impl World {
 
     /// Capture the Flag's tick: carried flags follow their carriers (in a
     /// passenger seat too) and score at home; a tossed flag flies till it
-    /// lands; a flag on the floor goes home on its clock, or sooner with
-    /// defenders by it and no enemy.
+    /// lands; a flag on the floor goes home on its clock.
     fn flags_tick(&mut self) {
         let Some(bases) = self.map.flags.filter(|_| self.rules.ctf && self.rules.teams) else {
             return;
@@ -2688,40 +2701,11 @@ impl World {
                         self.flag_home(t, NO_WINNER);
                         continue;
                     }
-                    self.flags[t].down_for = fl.down_for.saturating_sub(1);
-                    if self.flags[t].down_for == 0 {
+                    let left = fl.home_in.saturating_sub(1);
+                    self.flags[t].home_in = left;
+                    if left == 0 {
                         self.flag_home(t, NO_WINNER);
-                        continue;
                     }
-                    // Its defenders in reach return it, an enemy holds them.
-                    let (mut ours, mut theirs, mut first) = (0u32, 0u32, NO_WINNER);
-                    for (s, f) in self.fighters.iter().enumerate() {
-                        if !f.active() || fl.flying || !touches(f.body.pos, fl.pos) {
-                            continue;
-                        }
-                        if f.team as usize & 1 == t {
-                            ours += 1;
-                            if first == NO_WINNER {
-                                first = s as u8;
-                            }
-                        } else {
-                            theirs += 1;
-                        }
-                    }
-                    let full = ticks(FLAG_RETURN_MS);
-                    let pace = if theirs == 0 { ours.min(FLAG_RETURNERS) } else { 0 };
-                    let ret = (fl.ret + pace).min(full);
-                    self.flags[t].ret = ret;
-                    if ret >= full {
-                        self.flag_home(t, first);
-                        continue;
-                    }
-                    let by_hand = if pace > 0 {
-                        (full - ret).div_ceil(pace)
-                    } else {
-                        u32::MAX
-                    };
-                    self.flags[t].home_in = self.flags[t].down_for.min(by_hand);
                 }
                 _ => {}
             }
@@ -2823,8 +2807,7 @@ impl World {
         self.flags[t] = Flag {
             state: FLAG_DOWN,
             pos: at,
-            down_for: ticks(FLAG_RESET_MS),
-            home_in: ticks(FLAG_RESET_MS),
+            home_in: ticks(self.rules.flag_reset_ms()),
             flying: true,
             vel,
             ..Flag::default()
@@ -3908,7 +3891,6 @@ mod tests {
                 0,
             )],
             dress_profiles: &[],
-            nav: false,
             light: crate::map::LightDef::DAY,
             flags: &[],
             siege: &[],

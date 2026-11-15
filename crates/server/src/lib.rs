@@ -773,9 +773,9 @@ async fn jobs(ctx: Arc<Ctx>, mut rx: tmpsc::UnboundedReceiver<Job>) {
 
 /// A salt, a seed or an id: never zeros because the OS failed (`run`
 /// checks it once at start).
-/// Each map built once: a build is up to 0.2 s (Chrysalis' terrain, a
-/// big map's waypoints), and on the sim thread it held every room's tick
-/// that long. A clone is microseconds.
+/// Each map built once: a build is up to 0.2 s (Chrysalis' terrain), and
+/// on the sim thread it held every room's tick that long. A clone is
+/// microseconds.
 static BUILT: [std::sync::OnceLock<Map>; 256] = [const { std::sync::OnceLock::new() }; 256];
 
 /// Map `id`, built, from [`BUILT`]; None if there is no such map.
@@ -784,16 +784,19 @@ fn built(id: u8) -> Option<Map> {
     Some(BUILT[id as usize].get_or_init(|| d.build()).clone())
 }
 
-/// Builds every map, each on a thread of its own, so the sim thread only
+/// Builds every map and its bots' waypoints (`sim::nav`, up to a second
+/// on a Big Team map), each on a thread of its own, so the sim thread only
 /// clones (one that asks before a map is ready waits for that map alone).
 fn warm_maps() {
     static ONCE: std::sync::Once = std::sync::Once::new();
     ONCE.call_once(|| {
         for d in sim::maps::ALL.iter() {
             let id = d.id;
-            let _ = std::thread::Builder::new()
-                .name(format!("map-{id}"))
-                .spawn(move || built(id));
+            let _ = std::thread::Builder::new().name(format!("map-{id}")).spawn(move || {
+                if let Some(m) = built(id) {
+                    let _ = sim::nav::Nav::of(&m);
+                }
+            });
         }
     });
 }

@@ -3,8 +3,8 @@
 //! with a swing of it; letting go with SWAP, which tosses it ahead to be
 //! taken again once it lands (juggling it); riding a passenger seat with
 //! it, never driving, and scoring from the seat; scoring it at home only
-//! while your own flag is there; dropping it on death; returning it by
-//! standing by it (held by an enemy in reach) or on its clock; sudden death;
+//! while your own flag is there; dropping it on death; home on its clock
+//! alone (no touch return); a respawn longer than Slayer's; sudden death;
 //! and bots that play it on every map with flags.
 
 use sim::bot::{bot_match_on, Bot};
@@ -258,7 +258,7 @@ fn a_carrier_rides_never_drives_and_scores_from_the_seat() {
 }
 
 #[test]
-fn a_dead_carrier_drops_it_defenders_return_it_and_the_clock_does_too() {
+fn a_dead_carrier_drops_it_and_only_the_clock_takes_it_home() {
     let mut w = world();
     take(&mut w, 1, RED);
     w.fighters[1].body.pos = V3::new(10.0, 0.0, 10.0);
@@ -283,46 +283,64 @@ fn a_dead_carrier_drops_it_defenders_return_it_and_the_clock_does_too() {
     assert_eq!(w.flags[0].state, FLAG_DOWN);
     assert!(!w.flags[0].flying, "where they stood");
 
-    // Red stands by it: home in FLAG_RETURN_MS, not at once.
+    // No touch return: red standing over it, even taking it with USE,
+    // doesn't bring it home. Its clock does, and only it.
     let at = w.flags[0].pos;
     w.fighters[0].body.pos = at;
-    let full = ticks(FLAG_RETURN_MS);
-    for _ in 0..full / 2 {
-        assert_eq!(idle(&mut w), vec![]);
-    }
-    // An enemy comes into reach: the return holds.
-    w.fighters[3].body.pos = at + V3::new(0.5, 0.0, 0.0);
-    let held = w.flags[0].ret;
-    for _ in 0..TICK_HZ {
-        assert_eq!(idle(&mut w), vec![]);
-    }
-    assert_eq!(w.flags[0].ret, held, "contested");
-    // Gone again, and a second defender doubles the pace.
-    w.fighters[3].body.pos = V3::new(0.0, 0.0, 30.0);
     w.fighters[2].body.pos = at + V3::new(0.0, 0.0, 0.5);
+    let reset = ticks(w.rules.flag_reset_ms());
+    assert_eq!(w.flags[0].home_in, reset - 1);
     let mut back = Vec::new();
     let mut n = 0u32;
     while back.is_empty() {
-        back = idle(&mut w);
+        let mut inputs = [Input::default(); MAX_FIGHTERS];
+        if n.is_multiple_of(2) {
+            inputs[0].buttons = USE;
+        }
+        back = step(&mut w, &inputs);
         n += 1;
+        assert!(n <= reset, "still down after its clock ran out");
     }
-    assert_eq!(back, vec![(2, 0, 0)], "returned by red");
-    assert!(n.abs_diff((full - held).div_ceil(2)) <= 1, "two at it: {n} ticks");
+    assert_eq!(back, vec![(2, NO_WINNER, 0)], "home on its clock");
+    assert_eq!(n, reset - 1);
     assert_eq!(w.flags[0].state, FLAG_HOME);
-
-    // Dropped again and left alone: home on its clock.
-    take(&mut w, 3, RED);
-    w.fighters[3].body.pos = V3::new(-10.0, 0.0, 20.0);
-    w.fighters[0].body.pos = V3::new(-10.0, 0.0, -20.0);
-    w.fighters[2].body.pos = V3::new(-10.0, 0.0, -25.0);
-    assert_eq!(tap(&mut w, 3, SWAP), vec![(1, 3, 0)], "SWAP lets go of it");
-    w.fighters[3].body.pos = V3::new(-10.0, 0.0, 35.0);
-    let mut back = Vec::new();
-    for _ in 0..ticks(FLAG_RESET_MS) + 2 {
-        back.extend(idle(&mut w));
-    }
-    assert_eq!(back, vec![(2, NO_WINNER, 0)]);
     assert_eq!(w.flags[0].pos, RED);
+}
+
+/// Halo's CTF respawns are longer than Slayer's, Big Team's longer again;
+/// its flags lie longer before they go home on their own there.
+#[test]
+fn capture_the_flag_respawns_slower_than_slayer() {
+    assert_eq!(Rules::doubles().respawn_ms(), RESPAWN_MS);
+    assert_eq!(Rules::big_team().respawn_ms(), RESPAWN_MS);
+    assert_eq!(Rules::ctf().respawn_ms(), CTF_RESPAWN_MS);
+    assert_eq!(Rules::big_ctf().respawn_ms(), BIG_CTF_RESPAWN_MS);
+    const { assert!(RESPAWN_MS < CTF_RESPAWN_MS && CTF_RESPAWN_MS < BIG_CTF_RESPAWN_MS) };
+    assert_eq!(Rules::ctf().flag_reset_ms(), FLAG_RESET_MS);
+    assert_eq!(Rules::big_ctf().flag_reset_ms(), BIG_FLAG_RESET_MS);
+
+    let mut w = world();
+    // Blue's melee from behind kills red.
+    w.fighters[0].body.pos = V3::new(0.0, 0.0, 0.0);
+    w.fighters[1].body.pos = V3::new(-1.5, 0.0, 0.0);
+    w.fighters[0].yaw = 0;
+    w.fighters[1].yaw = 0;
+    let mut n = 0;
+    while w.fighters[0].alive {
+        let mut inputs = [Input::default(); MAX_FIGHTERS];
+        if w.fighters[1].melee_cool == 0 {
+            inputs[1].buttons = MELEE;
+        }
+        step(&mut w, &inputs);
+        n += 1;
+        assert!(n < TICK_HZ * 10, "never killed");
+    }
+    let mut down = 0u32;
+    while !w.fighters[0].alive {
+        idle(&mut w);
+        down += 1;
+    }
+    assert!(down.abs_diff(ticks(CTF_RESPAWN_MS)) <= 1, "back after {down} ticks");
 }
 
 #[test]
@@ -368,26 +386,26 @@ fn kills_dont_score_and_three_captures_win() {
 
 #[test]
 fn bots_go_for_flags_on_every_map_with_flags() {
-    // Bots take flags on the arenas (CTF's playlist) within ten minutes;
-    // carrying one home past defenders is rarer (a capture or two an hour)
-    // and the capture itself is pinned above. On a Big Team map the flags
-    // are too far apart for bots on foot, so there it only plays.
+    // Bots take flags on every map with them (on a Big Team map's, its
+    // trucks crewed and driven at them: they once stood by their own and
+    // spun on the spot), and carry them home on the arenas, CTF's
+    // playlist.
     for d in sim::maps::ALL.iter().filter(|d| d.flags.len() == 2) {
         let rules = Rules {
             score_limit: 1000,
             time_limit_ms: 0,
-            ..Rules::ctf()
+            ..if d.big() { Rules::big_ctf() } else { Rules::ctf() }
         };
         let mut w = World::new(d.build(), rules, 7, (1, 2));
-        let n = if d.big() { MAX_FIGHTERS } else { rules.seats as usize };
+        let n = rules.seats as usize;
         let mut bots = [Bot::new(7, 0, 0.5); MAX_FIGHTERS];
         for (s, b) in bots.iter_mut().enumerate().take(n) {
             w.seat(s, (s & 1) as u8);
-            *b = Bot::new(7, s, 0.3 + 0.2 * (s % 4) as f32);
+            *b = Bot::new(7, s, BOT_SKILL);
         }
-        let mut taken = 0;
+        let (mut taken, mut driven) = (0, 0u32);
         let mut inputs = [Input::default(); MAX_FIGHTERS];
-        let minutes = if d.big() { 1 } else { 10 };
+        let minutes = if d.big() { 6 } else { 5 };
         for _ in 0..ticks(minutes * 60_000) {
             for s in 0..n {
                 inputs[s] = bots[s].think(&w, s);
@@ -399,9 +417,21 @@ fn bots_go_for_flags_on_every_map_with_flags() {
                 .iter()
                 .filter(|e| e.kind == Ev::Flag && e.part == 0)
                 .count();
+            driven += w
+                .vehicles
+                .iter()
+                .filter(|v| v.active && v.driver().is_some() && v.vel.flat().len() > 5.0)
+                .count() as u32;
         }
-        if !d.big() {
-            assert!(taken > 0, "{}: bots never took a flag in {minutes} minutes", d.name);
+        assert!(taken > 0, "{}: bots never took a flag in {minutes} minutes", d.name);
+        if d.big() {
+            assert!(driven > ticks(60_000), "{}: bots drove for {driven} ticks", d.name);
+        } else {
+            assert!(
+                w.score.iter().sum::<i32>() > 0,
+                "{}: no capture in {minutes} minutes",
+                d.name
+            );
         }
         // And the parity gate's run has a CTF match here.
         assert_ne!(bot_match_on(d.id, 3, 1, 600), 0);

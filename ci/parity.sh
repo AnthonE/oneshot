@@ -56,8 +56,8 @@ for f in $(grep -l '^    siege: &\[\[' crates/sim/src/maps/*.rs); do
     fail=1
   fi
 done
-# Big Team with red's one-seaters flown, on every map with a skimmer and a
-# flier (bots never fly them).
+# Big Team with red's one-seaters flown on a scripted stick, on every map
+# with a skimmer and a flier.
 for f in $(grep -l '^        (\[.*\], [0-9]*, [0-9]*, 0, 2),$' crates/sim/src/maps/*.rs); do
   map=$(sed -n 's/^    id: \([0-9]*\),$/\1/p' "$f")
   n=$(target/release/examples/bot_match 7 6000 "$map" 5)

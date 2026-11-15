@@ -80,8 +80,6 @@
 //               turret?: "minigun", mirror: bool }]:
 //             where a vehicle starts and comes back, what it is, and what a truck's bed carries
 //             (none: its passenger shoots its own guns)
-//   nav       true: bots find their way by waypoints (crates/sim/src/nav.rs)
-//             rather than walking straight where they're going
 //   flag      { at: [x, z, y?] }: red's flag base for Capture the Flag,
 //             placed again at its mirror image for blue (needs "mirror")
 //   siege     { gens: [[x, z, y?] × SIEGE_GENS], core: [x, z, y?] }: red's
@@ -564,7 +562,6 @@ export function compile(spec, where = 'map.json') {
     const red = [...g.map((at, k) => point(at, `siege gen ${k}`)), point(spec.siege.core, 'siege core')];
     siege = [...red, ...red.map((p) => [p[0] * im[0], p[1], p[2] * im[1]])];
   }
-  if (spec.nav !== undefined && typeof spec.nav !== 'boolean') fail('nav: true or false');
   let modes = 0;
   if (spec.modes !== undefined) {
     if (!Array.isArray(spec.modes) || !spec.modes.length) fail(`modes: a list of ${Object.keys(ROTATIONS).join(', ')}`);
@@ -586,7 +583,7 @@ export function compile(spec, where = 'map.json') {
   // Profile solids are a table of their own, after the others in the sim.
   const profiles = solids.filter(isCurve), dressProfiles = dressSolids.filter(isCurve);
   return {
-    id: spec.id, name: spec.name, about: spec.about || '', practice: !!spec.practice, modes, nav: !!spec.nav, light, lo: [bx0, bz0], hi: [bx1, bz1],
+    id: spec.id, name: spec.name, about: spec.about || '', practice: !!spec.practice, modes, light, lo: [bx0, bz0], hi: [bx1, bz1],
     void: spec.void ?? null, boxes,
     solids: solids.filter((s) => !isCurve(s)), profiles, spawns, pads, roam, terrain, launchers, vehicles, flags, siege, dress,
     dressSolids: dressSolids.filter((s) => !isCurve(s)), dressProfiles, rocks,
@@ -1531,7 +1528,6 @@ export function rust(m, src) {
   L.push('    dress_profiles: &[');
   for (const s of m.dressProfiles) L.push(`        (${profileRow(s, lit)}, ${LOOKS.indexOf(s.look)}),`);
   L.push('    ],');
-  L.push(`    nav: ${m.nav},`);
   L.push(`    flags: &[${m.flags.map((f) => `[${f.map(lit).join(', ')}]`).join(', ')}],`);
   L.push(`    siege: &[${m.siege.map((f) => `[${f.map(lit).join(', ')}]`).join(', ')}],`);
   const lt = m.light;

@@ -96,9 +96,6 @@ pub struct Def {
     pub profiles: &'static [ProfileDef],
     /// And profile solids drawn only.
     pub dress_profiles: &'static [ProfileDef],
-    /// Bots find their way by waypoints ([`crate::nav`]) rather than
-    /// walking straight at where they're going.
-    pub nav: bool,
     pub light: LightDef,
     /// Capture the Flag's bases, red's then blue's (x y z each); empty on a
     /// map that plays no CTF.
@@ -189,7 +186,7 @@ impl Def {
             let g = ground(p[0], p[2]);
             V3::new(p[0], if p[1] == 0.0 { g } else { p[1].max(g) }, p[2])
         };
-        let mut map = Map {
+        Map {
             grid: Grid::default(),
             launchers: self
                 .launchers
@@ -255,15 +252,9 @@ impl Def {
             },
             siege: (self.siege.len() == SIEGE_NODES).then(|| core::array::from_fn(|i| v(self.siege[i]))),
             terrain,
-            nav: None,
             light: self.light,
         }
-        .indexed();
-        if self.nav {
-            let nav = crate::nav::Nav::build(&map);
-            map.nav = Some(nav);
-        }
-        map
+        .indexed()
     }
 }
 
@@ -309,8 +300,6 @@ pub struct Map {
     pub terrain: Option<Terrain>,
     pub launchers: Vec<Launcher>,
     pub vehicles: Vec<VehicleSpawn>,
-    /// Waypoints for bots, on a map that asks for them.
-    pub nav: Option<crate::nav::Nav>,
     pub light: LightDef,
     /// Capture the Flag's bases, red's then blue's: where each flag sits
     /// at home and where its side scores. None: no CTF here.
@@ -723,7 +712,6 @@ impl Map {
             terrain: None,
             launchers: Vec::new(),
             vehicles: Vec::new(),
-            nav: None,
             light: LightDef::DAY,
             flags: None,
             siege: None,
@@ -885,7 +873,6 @@ mod tests {
             dress_solids: &[],
             profiles: PROFILES,
             dress_profiles: &[],
-            nav: false,
             light: LightDef::DAY,
             flags: &[],
             siege: &[],
