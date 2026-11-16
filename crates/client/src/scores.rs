@@ -624,7 +624,7 @@ pub fn board(
     link: NonSend<crate::LinkRes>,
     keys: Res<ButtonInput<KeyCode>>,
     mouse: Res<ButtonInput<MouseButton>>,
-    binds: Res<crate::binds::Binds>,
+    (binds, touch): (Res<crate::binds::Binds>, Res<crate::touch::Touch>),
     mut st: ResMut<HudState>,
     mut images: ResMut<Assets<Image>>,
     (mut emblems, mut lines, mut buf): (Local<Emblems>, Local<Vec<Line>>, Local<String>),
@@ -637,7 +637,7 @@ pub fn board(
     let over = s.ready && s.core.phase() == sim::world::Phase::Over;
     let held = binds.pressed(
         crate::binds::Action::Scores,
-        &crate::binds::Controls::new(&keys, &mouse, 0.0),
+        &crate::binds::Controls::new(&keys, &mouse, 0.0).with_touch(&touch),
     );
     if st.board != held {
         st.board = held;

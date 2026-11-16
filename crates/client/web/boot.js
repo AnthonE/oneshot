@@ -59,6 +59,23 @@ document.addEventListener('fullscreenchange', () => {
   if (document.fullscreenElement) kb.lock(['Escape']).catch(() => {});
   else kb.unlock();
 });
+/* A phone's first tap takes the whole screen, on its side: the browser's
+   bars would cover the touch controls (crates/client/src/touch.rs). Once:
+   after that the settings' FULLSCREEN row is the player's. iPhones have no
+   fullscreen for a page; their bars stay. */
+const fingers = matchMedia('(pointer: coarse)').matches;
+if (fingers) {
+  const whole = (e) => {
+    if (e.pointerType !== 'touch') return;
+    removeEventListener('pointerdown', whole, true);
+    const el = document.documentElement;
+    if (document.fullscreenElement || !el.requestFullscreen) return;
+    el.requestFullscreen({ navigationUI: 'hide' })
+      .then(() => screen.orientation?.lock?.('landscape'))
+      .catch(() => { /* refused, or no orientation lock: as it was */ });
+  };
+  addEventListener('pointerdown', whole, true);
+}
 /* F11 is the page's fullscreen, never the browser's (which the page can't
    see, and which takes no Keyboard Lock): asked for here, inside the key's
    own event, which is all Safari honours; the game's row follows the page
@@ -748,8 +765,10 @@ try {
   // no click. `?streamer=1` is streamer mode for this run (SETTINGS > STREAM).
   const watchQ = params.get('watch');
   const watch = watchQ === null ? [] : /^[0-9a-zA-Z]{6}$/.test(watchQ) ? [`watch=${watchQ.toUpperCase()}`] : ['watch'];
+  // `?touch=1`, or a finger for a pointer: the touch controls from the start.
+  const touch = flag('touch') || (fingers && params.get('touch') !== '0') ? ['touch'] : [];
   const opts = ['autoplay', 'lite', 'capsules', 'fxdemo', 'menu', 'settings', 'graphics', 'streamer'].filter(flag)
-    .concat(params.get('fxstage') ? ['fxstage' + Number(params.get('fxstage'))] : []).concat(gfxOpts, soft).concat(party, watch).join(',');
+    .concat(params.get('fxstage') ? ['fxstage' + Number(params.get('fxstage'))] : []).concat(gfxOpts, soft).concat(party, watch, touch).join(',');
   voiceBridge(glue);
   say('Starting');
   requestAnimationFrame(shown);

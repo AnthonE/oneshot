@@ -161,6 +161,9 @@ fn run() -> Result<(), String> {
             party: if watch.is_some() { 0 } else { code },
             watch,
             streamer: flag("--streamer"),
+            // The touch controls from the start (a touchscreen's first
+            // finger turns them on anyway).
+            touch: flag("--touch"),
             // A picture is the window's size, not the monitor's; a tool's
             // run (a tape, the autopilot) doesn't take the screen.
             windowed: flag("--windowed") || shot.is_some() || record.is_some() || autoplay,

@@ -50,6 +50,7 @@ pub mod shot;
 pub mod sound;
 pub mod tags;
 pub mod tally;
+pub mod touch;
 pub mod ui;
 pub mod visor;
 #[cfg(not(target_arch = "wasm32"))]
@@ -303,6 +304,10 @@ pub struct Early(pub Vec<proto::Msg>);
 /// world moves under the crosshair at one speed (Gates' `input.rs`).
 const SENS: f32 = settings::SENS_DEG * core::f32::consts::PI / 180.0;
 
+/// Radians per logical px of a finger's drag at the default sensitivity
+/// (`touch.rs`): about half a turn across a phone's half.
+const TOUCH_SENS: f32 = 0.4 * core::f32::consts::PI / 180.0;
+
 /// The bound actions that are plain buttons (the player's keys,
 /// `binds.rs`); fire, the scope and the left trigger are `pump`'s own.
 const BUTTONS: [(binds::Action, u16); 8] = [
@@ -361,6 +366,9 @@ pub struct Opts {
     /// `streamer` (`?streamer=1`, `--streamer`): streamer mode this run,
     /// whatever the setting says (`settings::Settings::streamer`).
     pub streamer: bool,
+    /// `touch` (`?touch=1`, or a page on a phone): the touch controls on
+    /// from the start, not from the first finger (`touch.rs`).
+    pub touch: bool,
 }
 
 impl Opts {
@@ -396,6 +404,7 @@ impl Opts {
                     .map(|c| proto::party::code_parse(c).unwrap_or(0)),
             }),
             streamer: has("streamer"),
+            touch: has("touch"),
             open: if has("settings") || has("graphics") {
                 Screen::Settings
             } else if has("menu") {
@@ -556,6 +565,7 @@ fn app_on(link: Box<dyn Link>, opts: Opts, first: Screen) -> App {
     .add_plugins(pause::plugin)
     .add_plugins(options::plugin)
     .add_plugins(pad::plugin)
+    .add_plugins(touch::plugin)
     .add_plugins(loading::plugin)
     .add_plugins(look::shot::plugin)
     // F9's clip of the last half minute, and `--record` (`clip.rs`).
@@ -699,7 +709,7 @@ fn app_on(link: Box<dyn Link>, opts: Opts, first: Screen) -> App {
         Update,
         (
             grab,
-            (pump, see).chain(),
+            (touch::read, pump, see).chain(),
             happened,
             rebuild,
             look::textures::prepare,
@@ -821,6 +831,7 @@ fn app_on(link: Box<dyn Link>, opts: Opts, first: Screen) -> App {
     app.add_systems(Update, expose.after(hud::draw))
         .add_systems(PostUpdate, pointer::follow);
     app.insert_resource(opts);
+    app.world_mut().resource_mut::<touch::Touch>().on = opts.touch;
     if opts.graphics {
         app.world_mut().resource_mut::<options::Page>().cat = options::GRAPHICS;
     }
@@ -951,20 +962,23 @@ fn pump(
     motion: Res<AccumulatedMouseMotion>,
     scroll: Res<AccumulatedMouseScroll>,
     cursor: Query<&CursorOptions, With<PrimaryWindow>>,
-    (binds, settings): (Res<binds::Binds>, Res<settings::Settings>),
+    (binds, settings, touch): (Res<binds::Binds>, Res<settings::Settings>, Res<touch::Touch>),
     gen: Option<Res<front::LinkGen>>,
 ) {
     face_spawn(&mut look, link.0.session(), gen.map_or(0, |g| g.0));
     // The mouse is ours only while held: on the web, the page's lock is the
     // truth (a lock asked for and not yet granted, or let go behind our
-    // back, turns nothing and fires nothing).
-    let grabbed =
+    // back, turns nothing and fires nothing). A finger needs no lock: the
+    // touch controls are live on the match's screen (`touch.rs`).
+    let locked =
         cursor.single().is_ok_and(|c| c.grab_mode != CursorGrabMode::None) && pointer::pointer_locked().unwrap_or(true);
+    let grabbed = touch.live || locked;
     // Watching a match: we look where the player we follow looks (their
     // snapshots' aim, as a film does), and a click or Space follows the
     // next one. Nothing we press is sent.
     if link.0.session().watch && link.0.live() {
-        let next = grabbed && (mouse.just_pressed(MouseButton::Left) || keys.just_pressed(KeyCode::Space));
+        let next =
+            (grabbed && (mouse.just_pressed(MouseButton::Left) || keys.just_pressed(KeyCode::Space))) || touch.tapped;
         if next {
             link.0.session_mut().follow_next();
         }
@@ -978,7 +992,7 @@ fn pump(
         link.0.update(Input::default());
         return;
     }
-    let c = binds::Controls::new(&keys, &mouse, scroll.delta.y);
+    let c = binds::Controls::new(&keys, &mouse, scroll.delta.y).with_touch(&touch);
     let held = |a: binds::Action| grabbed && (binds.pressed(a, &c) || binds.just_pressed(a, &c));
     // A gun in each hand: ZOOM's button (Mouse 2, by default the left
     // hand's trigger too) is no scope.
@@ -1060,11 +1074,18 @@ fn pump(
         let base = SENS * settings.sensitivity;
         let sens = base / look.drawn_mag();
         let up = if settings.invert { -1.0 } else { 1.0 };
+        // A finger's drag is in screen px, slower to the eye than a
+        // mouse's counts are: its own speed, under the same slider.
+        let finger = TOUCH_SENS * settings.sensitivity / settings::SENS_DEFAULT / look.drawn_mag();
+        // The mouse turns only while it holds the lock: a page's winit
+        // reports a finger's moves as the mouse's too.
+        let mouse = if locked { motion.delta } else { Vec2::ZERO };
+        let turn = mouse * sens + touch.turn * finger;
         // Kept to a turn: an f32 summed without end loses the low bits a
         // slow hand moves it by.
-        look.yaw = (look.yaw + motion.delta.x * sens).rem_euclid(core::f32::consts::TAU);
+        look.yaw = (look.yaw + turn.x).rem_euclid(core::f32::consts::TAU);
         let max = PITCH_MAX as f32 / 65536.0 * core::f32::consts::TAU;
-        look.pitch = (look.pitch - motion.delta.y * sens * up).clamp(-max, max);
+        look.pitch = (look.pitch - turn.y * up).clamp(-max, max);
     }
     if grabbed && binds.just_pressed(binds::Action::NetGraph, &c) {
         st.net = !st.net;
@@ -1098,6 +1119,10 @@ fn pump(
         axis(binds::Action::Right, binds::Action::Left),
         axis(binds::Action::Forward, binds::Action::Back),
     );
+    // The stick where no key moves us: a push part way is a walk.
+    if touch.live && (mx, mz) == (0, 0) {
+        (mx, mz) = ((touch.stick.x * 127.0) as i32, (touch.stick.y * 127.0) as i32);
+    }
     if auto.on {
         (buttons, mx, mz) = autopilot(&mut auto, &mut look, &link.0.session().core, link.0.now_ms());
     }
@@ -2138,6 +2163,7 @@ fn expose(
     party: Option<Res<party::PartyView>>,
     ear: Res<sound::Ear>,
     real: Res<Time<Real>>,
+    (look, touch): (Res<Look>, Res<touch::Touch>),
     (mut frames, mut described, mut wrote): (Local<u32>, Local<Option<String>>, Local<f64>),
 ) {
     use wasm_bindgen::JsValue;
@@ -2192,6 +2218,9 @@ fn expose(
         js_sys::Array::of3(&p.x.into(), &p.y.into(), &p.z.into()).into(),
     );
     set(&o, "health", f.health.into());
+    // Where we look, radians, and whether a finger plays (`touch.rs`).
+    set(&o, "yaw", look.yaw.into());
+    set(&o, "touch", touch.on.into());
     set(&o, "killcam", s.core.killcam(link.0.now_ms()).is_some().into());
     let name = match screen.get() {
         Screen::Title => "title",
