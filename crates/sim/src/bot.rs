@@ -250,6 +250,10 @@ const RING_M: f32 = 1.5;
 /// Fighting in a ring or at the rally: its strafe, of the stick's full
 /// tilt.
 const RING_STRAFE: i8 = 32;
+/// An enemy minion this near (flat) the node of a ring a bot keeps or
+/// pushes is shot before any fighter farther than this.
+const RING_MINION_M: f32 = NODE_REACH + 3.0;
+const RING_MINION_FIRST_M: f32 = 12.0;
 /// Spare defenders that answer a ring the enemy stands in.
 const ROVERS: usize = 1;
 /// Trucks a side's bots crew at once (the other is left for people).
@@ -1086,7 +1090,9 @@ impl Bot {
     /// Looks for the nearest enemy it can see (one well camouflaged only
     /// near; on its way somewhere that matters, the far ones let be; the
     /// one it hunts before others), and in Siege with none, the nearest
-    /// enemy minion in sight. The target, and how long it has had it.
+    /// enemy minion in sight; keeping or pushing a ring, an enemy minion in
+    /// it before any fighter but a near one. The target, and how long it
+    /// has had it.
     fn look(&mut self, w: &World, slot: usize, eye: V3) {
         let me = &w.fighters[slot];
         let (sn, cs) = crate::geom::yaw_sincos(me.yaw);
@@ -1120,7 +1126,30 @@ impl Bot {
             }
         }
         self.minion = 255;
-        if best == 255 && w.rules.siege {
+        // In its ring: an enemy minion there holds it for them, or
+        // overloads ours, so it goes first.
+        let ring = match self.job {
+            Job::Push(n) | Job::Hold(n) => w.map.siege.map(|a| a[n as usize]),
+            _ => None,
+        };
+        if let Some(c) = ring.filter(|_| best == 255 || near > RING_MINION_FIRST_M) {
+            let mut mn = f32::INFINITY;
+            for (i, m) in w.minions.iter().enumerate() {
+                if !m.alive || m.team == me.team & 1 || (m.body.pos - c).flat().len() >= RING_MINION_M {
+                    continue;
+                }
+                let chest = m.body.pos + V3::new(0.0, 0.9, 0.0);
+                let d = (chest - eye).len();
+                if d < mn && d < MINION_RANGE * 1.5 && w.map.clear(eye, chest) {
+                    mn = d;
+                    self.minion = i as u8;
+                }
+            }
+            if self.minion != 255 {
+                best = 255;
+            }
+        }
+        if best == 255 && self.minion == 255 && w.rules.siege {
             for (i, m) in w.minions.iter().enumerate() {
                 if !m.alive || m.team == me.team & 1 {
                     continue;
