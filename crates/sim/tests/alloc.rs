@@ -5,7 +5,7 @@ use std::alloc::{GlobalAlloc, Layout, System};
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use sim::bot::Bot;
-use sim::consts::MAX_FIGHTERS;
+use sim::consts::{MAX_FIGHTERS, SIEGE_BOT_SKILL};
 use sim::input::Input;
 use sim::world::{Rules, World};
 use sim::Map;
@@ -34,6 +34,7 @@ fn the_tick_allocates_nothing() {
     on_proving_grounds();
     on_terrain_with_vehicles();
     on_profiles();
+    on_siege();
 }
 
 fn on_proving_grounds() {
@@ -82,11 +83,22 @@ fn on_terrain_with_vehicles() {
         time_limit_ms: 0,
         ..Rules::big_team()
     };
-    let mut w = World::new(sim::maps::canyon::DEF.build(), rules, 5, (1, 2));
+    sixteen(sim::maps::canyon::DEF.build(), rules, 0.6, 20_000);
+}
+
+/// Siege on Dry Fork as served: the side plans, the gate, trucks to the
+/// rings, towers, minion waves, generators broken.
+fn on_siege() {
+    sixteen(sim::maps::canyon::DEF.build(), Rules::siege(), SIEGE_BOT_SKILL, 60_000);
+}
+
+/// Sixteen bots of `skill` on `map` under `rules`, `n` ticks counted.
+fn sixteen(map: Map, rules: Rules, skill: f32, n: u32) {
+    let mut w = World::new(map, rules, 5, (1, 2));
     let mut bots = [Bot::new(5, 0, 0.5); MAX_FIGHTERS];
     for (s, b) in bots.iter_mut().enumerate() {
         w.seat(s, (s & 1) as u8);
-        *b = Bot::new(5, s, 0.6);
+        *b = Bot::new(5, s, skill);
     }
     let mut inputs = [Input::default(); MAX_FIGHTERS];
     let lag = [3 << 8; MAX_FIGHTERS];
@@ -100,6 +112,6 @@ fn on_terrain_with_vehicles() {
     };
     run(&mut w, 500);
     let before = ALLOCS.load(Ordering::Relaxed);
-    run(&mut w, 20_000);
+    run(&mut w, n);
     assert_eq!(ALLOCS.load(Ordering::Relaxed) - before, 0);
 }
