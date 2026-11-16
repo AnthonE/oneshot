@@ -155,8 +155,9 @@ fn main() {
     let mut was_alive = [false; MAX_FIGHTERS];
     let (mut came, mut stood) = ([false; MAX_FIGHTERS], [false; MAX_FIGHTERS]);
     let (mut lives, mut lives_near, mut lives_in) = (0u32, 0u32, 0u32);
-    // Hold seconds, and those more than 30 m from the node; defender seats'
-    // ticks alive and riding.
+    // Hold seconds, and those more than 30 m from the node; keepers' ticks
+    // alive and riding (a defender seat while its own generator stands:
+    // past that, a spare who may attack).
     let (mut hold_s, mut hold_away) = (0u32, 0u32);
     let (mut def_t, mut def_ride) = (0u64, 0u64);
     // Every seat's run at a truck's wheel, and the longest.
@@ -338,7 +339,8 @@ fn main() {
                 } else {
                     wheel[s] = 0;
                 }
-                if !att && f.active() {
+                let keeps = s / 4 < SIEGE_GENS && !w.nodes[(s & 1) * (SIEGE_GENS + 1) + s / 4].broken;
+                if !att && keeps && f.active() {
                     def_t += 1;
                     def_ride += f.riding().is_some() as u64;
                 }
@@ -536,7 +538,7 @@ fn main() {
             pc(lives_in as u64, lives as u64)
         );
         println!(
-            "    holders away: {:.0}% of Hold seconds more than 30 m from their node; defenders riding {:.1}%",
+            "    holders away: {:.0}% of Hold seconds more than 30 m from their node; keepers riding {:.1}%",
             pc(hold_away as u64, hold_s as u64),
             pc(def_ride, def_t)
         );
@@ -556,9 +558,19 @@ fn main() {
             (Some(_), 1) => "blue",
             _ => "none",
         };
+        // Generators each side broke (the score counts a core too).
+        let gens = |by: usize| {
+            broke
+                .iter()
+                .filter(|b| !World::is_core(b.1) && World::node_side(b.1) != by)
+                .count()
+        };
         println!(
-            "SIEGE map={map} seed={seed} end={end:.0} how={how} winner={winner} breaks={}-{} first={first}",
-            w.score[0], w.score[1]
+            "SIEGE map={map} seed={seed} end={end:.0} how={how} winner={winner} breaks={}-{} first={first} score={}-{}",
+            gens(0),
+            gens(1),
+            w.score[0],
+            w.score[1]
         );
     }
     let (a, st, sp) = by_job.values().fold((0u64, 0u64, 0u64), |(a, b, c), &(x, y, z)| {
