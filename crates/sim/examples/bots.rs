@@ -25,7 +25,7 @@
 
 use std::collections::BTreeMap;
 
-use sim::bot::{Bot, Job};
+use sim::bot::{push_target, Bot, Job};
 use sim::consts::*;
 use sim::events::{Cause, Kind as Ev};
 use sim::geom::V3;
@@ -35,13 +35,6 @@ use sim::world::{Rules, World, NODE_CONTESTED, NODE_FALLING, NODE_QUIET, NODE_RI
 /// A job's name, without what it is about.
 fn name(j: Job) -> String {
     format!("{j:?}").split('(').next().unwrap_or("").to_string()
-}
-
-/// The node a Siege job is about, by the job's name ("Push", "Hold").
-fn about(j: Job, what: &str) -> Option<usize> {
-    let s = format!("{j:?}");
-    let (n, rest) = s.split_once('(')?;
-    (n == what).then(|| rest.trim_end_matches(')').parse().ok()).flatten()
 }
 
 /// Whether Siege node `n` can be overloaded: standing, and a core only
@@ -171,6 +164,8 @@ fn main() {
     let mut longest = 0u32;
     // Push seconds on foot out of its ring, and those it stood still.
     let (mut push_out, mut push_still) = (0u32, 0u32);
+    // DEBUG: each side's target, as last printed.
+    let mut target = [usize::MAX; 2];
 
     let total = ticks(minutes * 60_000);
     let mut inputs = [Input::default(); MAX_FIGHTERS];
@@ -237,6 +232,20 @@ fn main() {
             );
         }
         w.step(&inputs, &[0; MAX_FIGHTERS]);
+        for side in 0..2 {
+            if !(debug && siege) {
+                break;
+            }
+            let n = push_target(&w, side);
+            if n != target[side] {
+                target[side] = n;
+                println!(
+                    "  plan t={:.1}s side {} target {n}",
+                    t as f32 / TICK_HZ as f32,
+                    ["red", "blue"][side]
+                );
+            }
+        }
         for e in w.events.as_slice() {
             if debug && e.kind == Ev::Flag {
                 println!(
@@ -373,7 +382,8 @@ fn main() {
                     }
                     let mine = f.team as usize & 1;
                     let job = bots[s].job();
-                    if let Some(k) = about(job, "Hold") {
+                    if let Job::Hold(k) = job {
+                        let k = k as usize;
                         hold_s += 1;
                         hold_away += ((f.body.pos - at[k]).flat().len() > 30.0) as u32;
                     }
@@ -392,7 +402,7 @@ fn main() {
                     if f.riding().is_some() {
                         continue;
                     }
-                    if about(job, "Push").is_some_and(|k| !in_ring(f.body.pos, at[k])) {
+                    if matches!(job, Job::Push(k) if !in_ring(f.body.pos, at[k as usize])) {
                         push_out += 1;
                         push_still += ((f.body.pos - last[s]).flat().len() < 1.0) as u32;
                     }
