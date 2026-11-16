@@ -83,22 +83,33 @@ fn on_terrain_with_vehicles() {
         time_limit_ms: 0,
         ..Rules::big_team()
     };
-    sixteen(sim::maps::canyon::DEF.build(), rules, 0.6, 20_000);
+    sixteen(sim::maps::canyon::DEF.build(), rules, 0.6, 5, 20_000);
 }
 
 /// Siege on Dry Fork as served: the side plans, the gate, trucks to the
 /// rings, towers, minion waves, generators broken.
 fn on_siege() {
-    sixteen(sim::maps::canyon::DEF.build(), Rules::siege(), SIEGE_BOT_SKILL, 60_000);
+    let w = sixteen(
+        sim::maps::canyon::DEF.build(),
+        Rules::siege(),
+        SIEGE_BOT_SKILL,
+        1,
+        60_000,
+    );
+    assert!(
+        w.nodes.iter().any(|n| n.broken),
+        "no generator broke in the counted ticks"
+    );
 }
 
-/// Sixteen bots of `skill` on `map` under `rules`, `n` ticks counted.
-fn sixteen(map: Map, rules: Rules, skill: f32, n: u32) {
-    let mut w = World::new(map, rules, 5, (1, 2));
-    let mut bots = [Bot::new(5, 0, 0.5); MAX_FIGHTERS];
+/// Sixteen bots of `skill` on `map` under `rules` from `seed`, `n` ticks
+/// counted; the world they leave.
+fn sixteen(map: Map, rules: Rules, skill: f32, seed: u64, n: u32) -> World {
+    let mut w = World::new(map, rules, seed, (1, 2));
+    let mut bots = [Bot::new(seed, 0, 0.5); MAX_FIGHTERS];
     for (s, b) in bots.iter_mut().enumerate() {
         w.seat(s, (s & 1) as u8);
-        *b = Bot::new(5, s, skill);
+        *b = Bot::new(seed, s, skill);
     }
     let mut inputs = [Input::default(); MAX_FIGHTERS];
     let lag = [3 << 8; MAX_FIGHTERS];
@@ -114,4 +125,5 @@ fn sixteen(map: Map, rules: Rules, skill: f32, n: u32) {
     let before = ALLOCS.load(Ordering::Relaxed);
     run(&mut w, n);
     assert_eq!(ALLOCS.load(Ordering::Relaxed) - before, 0);
+    w
 }

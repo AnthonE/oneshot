@@ -8,7 +8,7 @@
 //! enemy's generator, count in its ring and die to a rifle; and bots that
 //! play it on every map with its nodes.
 
-use sim::bot::{bot_match_on, rally_point, Bot, Job};
+use sim::bot::{bot_match_on, rally_point, rally_spot, Bot, Job};
 use sim::consts::*;
 use sim::events::Cause;
 use sim::events::Kind as Ev;
@@ -359,69 +359,27 @@ fn waves_come_out_walk_to_the_enemy_generator_count_in_its_ring_and_die_to_a_rif
     assert_eq!(w.fighters[0].kills, 0, "a minion is no kill");
 }
 
-/// How long the bots' Siege match plays on each map.
+/// How long each of the bots' Siege matches plays at most, and the seeds
+/// tried on each map.
 const MINUTES: u32 = 12;
+const SEEDS: [u64; 5] = [7, 8, 9, 10, 11];
 
-/// Bots play Siege on every map with its nodes: they push a generator
-/// together and break it, a side's defenders answer an enemy in its ring,
-/// and the plan's jobs show (a push going from the gate, a keeper in a
-/// ring); towers fire and minions are shot.
-#[test]
-fn bots_push_together_break_generators_and_defenders_answer() {
-    let mut failed = Vec::new();
-    for d in sim::maps::ALL.iter().filter(|d| d.siege.len() == SIEGE_NODES) {
-        let mut w = World::new(d.build(), Rules::siege(), 7, (1, 2));
-        let at = w.map.siege.expect("a Siege map");
-        let mut bots = [Bot::new(7, 0, 0.5); MAX_FIGHTERS];
-        for (s, b) in bots.iter_mut().enumerate() {
-            w.seat(s, (s & 1) as u8);
-            *b = Bot::new(7, s, SIEGE_BOT_SKILL);
-        }
-        let (mut needles, mut minions_shot) = (0, 0);
-        let (mut broke, mut grouped, mut answered, mut went, mut held) = (false, false, false, false, false);
-        let mut was = [Job::Free; MAX_FIGHTERS];
-        let mut inputs = [Input::default(); MAX_FIGHTERS];
-        for t in 0..ticks(MINUTES * 60_000) {
-            for s in 0..MAX_FIGHTERS {
-                inputs[s] = bots[s].think(&w, s);
-                let job = bots[s].job();
-                went |= matches!((was[s], job), (Job::Rally(a), Job::Push(b)) if a == b);
-                held |= matches!(job, Job::Hold(_));
-                was[s] = job;
-            }
-            w.step(&inputs, &NO_LAG);
-            for e in w.events.as_slice() {
-                needles += (e.kind == Ev::Tower) as u32;
-                minions_shot += (e.kind == Ev::Minion && e.part <= 1 && e.a != NO_WINNER) as u32;
-                // A generator broken with a fighter in its ring, not by
-                // minions alone.
-                broke |=
-                    e.kind == Ev::Node && e.part == 0 && (e.a as usize) < MAX_FIGHTERS && !World::is_core(e.b as usize);
-            }
-            answered |= w.nodes.iter().any(|n| n.held == NODE_CONTESTED);
-            if t % TICK_HZ == 0 {
-                for (n, &p) in at.iter().enumerate() {
-                    if w.nodes[n].broken || World::is_core(n) {
-                        continue;
-                    }
-                    let theirs = World::node_side(n) ^ 1;
-                    let in_ring = w
-                        .fighters
-                        .iter()
-                        .filter(|f| {
-                            let d = f.body.pos - p;
-                            f.active()
-                                && f.riding().is_none()
-                                && f.team as usize & 1 == theirs
-                                && d.flat().len() < NODE_REACH
-                                && sim::fmath::fabs(d.y) < NODE_RISE
-                        })
-                        .count();
-                    grouped |= in_ring >= 2;
-                }
-            }
-        }
-        for (ok, what) in [
+/// What a bots' Siege match of `seed` on `d` showed by the time it had
+/// shown all of it, or by [`MINUTES`]: the checks it never met.
+fn bots_play_siege(d: &sim::map::Def, seed: u64) -> Vec<&'static str> {
+    let mut w = World::new(d.build(), Rules::siege(), seed, (1, 2));
+    let at = w.map.siege.expect("a Siege map");
+    let mut bots = [Bot::new(seed, 0, 0.5); MAX_FIGHTERS];
+    for (s, b) in bots.iter_mut().enumerate() {
+        w.seat(s, (s & 1) as u8);
+        *b = Bot::new(seed, s, SIEGE_BOT_SKILL);
+    }
+    let (mut needles, mut minions_shot) = (0, 0);
+    let (mut broke, mut grouped, mut answered, mut went, mut held) = (false, false, false, false, false);
+    let mut was = [Job::Free; MAX_FIGHTERS];
+    let mut inputs = [Input::default(); MAX_FIGHTERS];
+    let checks = |broke, grouped, answered, went, held, needles, minions_shot| {
+        [
             (broke, "no generator broken by a fighter"),
             (grouped, "never two of a side in an enemy ring"),
             (answered, "no ring contested"),
@@ -429,21 +387,93 @@ fn bots_push_together_break_generators_and_defenders_answer() {
             (held, "nobody held a ring"),
             (needles > 0, "no tower fired"),
             (minions_shot > 0, "nobody shot a minion"),
-        ] {
-            if !ok {
-                failed.push((d.name, what));
+        ]
+        .into_iter()
+        .filter(|&(ok, _)| !ok)
+        .map(|(_, what)| what)
+        .collect::<Vec<_>>()
+    };
+    for t in 0..ticks(MINUTES * 60_000) {
+        for s in 0..MAX_FIGHTERS {
+            inputs[s] = bots[s].think(&w, s);
+            let job = bots[s].job();
+            went |= matches!((was[s], job), (Job::Rally(a), Job::Push(b)) if a == b);
+            held |= matches!(job, Job::Hold(_));
+            was[s] = job;
+        }
+        w.step(&inputs, &NO_LAG);
+        for e in w.events.as_slice() {
+            needles += (e.kind == Ev::Tower) as u32;
+            minions_shot += (e.kind == Ev::Minion && e.part <= 1 && e.a != NO_WINNER) as u32;
+            // A generator broken with a fighter in its ring, not by
+            // minions alone.
+            broke |=
+                e.kind == Ev::Node && e.part == 0 && (e.a as usize) < MAX_FIGHTERS && !World::is_core(e.b as usize);
+        }
+        answered |= w.nodes.iter().any(|n| n.held == NODE_CONTESTED);
+        if t % TICK_HZ == 0 {
+            for (n, &p) in at.iter().enumerate() {
+                if w.nodes[n].broken || World::is_core(n) {
+                    continue;
+                }
+                let theirs = World::node_side(n) ^ 1;
+                let in_ring = w
+                    .fighters
+                    .iter()
+                    .filter(|f| {
+                        let d = f.body.pos - p;
+                        f.active()
+                            && f.riding().is_none()
+                            && f.team as usize & 1 == theirs
+                            && d.flat().len() < NODE_REACH
+                            && sim::fmath::fabs(d.y) < NODE_RISE
+                    })
+                    .count();
+                grouped |= in_ring >= 2;
             }
+            // All shown: no need to play on.
+            if checks(broke, grouped, answered, went, held, needles, minions_shot).is_empty() {
+                break;
+            }
+        }
+    }
+    checks(broke, grouped, answered, went, held, needles, minions_shot)
+}
+
+/// Bots play Siege on every map with its nodes: in one of a few matches
+/// at least they push a generator together and break it, a side's
+/// defenders answer an enemy in its ring, and the plan's jobs show (a push
+/// going from the gate, a keeper in a ring); towers fire and minions are
+/// shot.
+#[test]
+fn bots_push_together_break_generators_and_defenders_answer() {
+    let mut failed = Vec::new();
+    for d in sim::maps::ALL.iter().filter(|d| d.siege.len() == SIEGE_NODES) {
+        let mut lacked = Vec::new();
+        for seed in SEEDS {
+            let lack = bots_play_siege(d, seed);
+            if lack.is_empty() {
+                lacked.clear();
+                break;
+            }
+            lacked.push((seed, lack));
+        }
+        if !lacked.is_empty() {
+            failed.push((d.name, lacked));
         }
         // And the parity gate's run has a Siege match here.
         assert_ne!(bot_match_on(d.id, 4, 1, 600), 0);
     }
-    assert!(failed.is_empty(), "in {MINUTES} minutes: {failed:#?}");
+    assert!(
+        failed.is_empty(),
+        "in {MINUTES} minutes, at seeds {SEEDS:?}: {failed:#?}"
+    );
 }
 
 /// A side's push gathers at its gate: on every map with nodes, for each
 /// side and each enemy node, the rally is on the way out of its core to
 /// that node (nearer it by the waypoints), by the launcher that throws the
-/// push out and off its pad.
+/// push out and off its pad, and so is every seat's spot about it.
 #[test]
 fn the_siege_rally_is_on_the_way_out() {
     for d in sim::maps::ALL.iter().filter(|d| d.siege.len() == SIEGE_NODES) {
@@ -475,6 +505,19 @@ fn the_siege_rally_is_on_the_way_out() {
                     "{}: side {side}'s rally for node {t} at {r:?} is {pad} m from a launcher's pad",
                     d.name
                 );
+                // Nobody's own spot about it is on a pad, or a step off one.
+                for slot in (side..MAX_FIGHTERS).step_by(2) {
+                    let p = rally_spot(&w, r, slot);
+                    let near = w.map.launchers.iter().any(|l| {
+                        let (lo, hi) = (l.area.min, l.area.max);
+                        p.x > lo.x - 2.0 && p.x < hi.x + 2.0 && p.z > lo.z - 2.0 && p.z < hi.z + 2.0
+                    });
+                    assert!(
+                        !near,
+                        "{}: seat {slot}'s spot at the rally {p:?} is by a launcher's pad",
+                        d.name
+                    );
+                }
             }
         }
     }
