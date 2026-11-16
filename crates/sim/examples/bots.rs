@@ -25,7 +25,7 @@
 
 use std::collections::BTreeMap;
 
-use sim::bot::{push_target, Bot, Job};
+use sim::bot::{push_target, rally_point, Bot, Job};
 use sim::consts::*;
 use sim::events::{Cause, Kind as Ev};
 use sim::geom::V3;
@@ -239,10 +239,14 @@ fn main() {
             let n = push_target(&w, side);
             if n != target[side] {
                 target[side] = n;
+                let r = rally_point(&w, side, n);
                 println!(
-                    "  plan t={:.1}s side {} target {n}",
+                    "  plan t={:.1}s side {} target {n} rally ({:.1},{:.1},{:.1})",
                     t as f32 / TICK_HZ as f32,
-                    ["red", "blue"][side]
+                    ["red", "blue"][side],
+                    r.x,
+                    r.y,
+                    r.z
                 );
             }
         }

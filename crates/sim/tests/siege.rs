@@ -8,13 +8,14 @@
 //! enemy's generator, count in its ring and die to a rifle; and bots that
 //! play it on Dry Fork.
 
-use sim::bot::{bot_match_on, Bot};
+use sim::bot::{bot_match_on, rally_point, Bot};
 use sim::consts::*;
 use sim::events::Cause;
 use sim::events::Kind as Ev;
 use sim::geom::V3;
 use sim::input::*;
 use sim::map::Map;
+use sim::nav::Nav;
 use sim::world::{Phase, Rules, World, NODE_CONTESTED, NODE_FALLING, NODE_RISING, NO_WINNER};
 
 const NO_LAG: [u32; MAX_FIGHTERS] = [0; MAX_FIGHTERS];
@@ -386,5 +387,45 @@ fn bots_and_minions_push_on_dry_fork() {
         assert!(minions_shot > 0, "{}: nobody shot a minion", d.name);
         // And the parity gate's run has a Siege match here.
         assert_ne!(bot_match_on(d.id, 4, 1, 600), 0);
+    }
+}
+
+/// A side's push gathers at its gate: on every map with nodes, for each
+/// side and each enemy node, the rally is on the way out of its core to
+/// that node (nearer it by the waypoints), by the launcher that throws the
+/// push out and off its pad.
+#[test]
+fn the_siege_rally_is_on_the_way_out() {
+    for d in sim::maps::ALL.iter().filter(|d| d.siege.len() == SIEGE_NODES) {
+        let w = World::new(d.build(), Rules::siege(), 1, (1, 2));
+        let at = w.map.siege.expect("a Siege map");
+        let nav = Nav::of(&w.map).expect("one of the game's maps");
+        for side in 0..2 {
+            let core = at[side * (SIEGE_GENS + 1) + SIEGE_GENS];
+            for k in 0..=SIEGE_GENS {
+                let t = (side ^ 1) * (SIEGE_GENS + 1) + k;
+                let r = rally_point(&w, side, t);
+                let cost = |p: V3| {
+                    let mut way = u16::MAX;
+                    nav.foot.cost(nav.siege(t), p, &mut way)
+                };
+                assert!(
+                    cost(r) < cost(core),
+                    "{}: side {side}'s rally for node {t} at {r:?} is no nearer it than its core",
+                    d.name
+                );
+                let pad = w
+                    .map
+                    .launchers
+                    .iter()
+                    .map(|l| ((l.area.min + l.area.max) * 0.5 - r).flat().len())
+                    .fold(f32::INFINITY, f32::min);
+                assert!(
+                    pad > 3.0 && pad < 12.0,
+                    "{}: side {side}'s rally for node {t} at {r:?} is {pad} m from a launcher's pad",
+                    d.name
+                );
+            }
+        }
     }
 }
