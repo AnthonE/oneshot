@@ -256,8 +256,8 @@ const RING_MINION_M: f32 = NODE_REACH + 3.0;
 const RING_MINION_FIRST_M: f32 = 12.0;
 /// Spare defenders that answer a ring the enemy stands in.
 const ROVERS: usize = 1;
-/// Trucks a side's bots crew at once (the other is left for people).
-const SIEGE_TRUCKS: usize = 1;
+/// Trucks a side's bots crew at once: on today's maps, both of the side's.
+const SIEGE_TRUCKS: usize = 2;
 /// No hull this near an enemy node still standing is crewed.
 const AT_NODE_M: f32 = 45.0;
 /// A truck on a push parks this short of its way's end, out of the ring,
@@ -521,10 +521,11 @@ fn nearest_free(w: &World, free: &[bool; MAX_FIGHTERS], at: V3, within: f32) -> 
 
 /// Siege's plan of side `side` ([`plan`]'s): whoever rides stays in; by
 /// seat, every generator of ours still standing has a keeper, a spare
-/// defender roves to the ring the enemy is in (one keeps our core once it
-/// is open), and the rest attack; with our core open and the enemy in
-/// it, everyone at home to it. The attackers push the side's one target
-/// ([`push_target`]): two of them by a free truck take it there; at home
+/// defender roves to the ring the enemy is in, else waits where they come
+/// first (one keeps our core once it is open), and the rest attack; with
+/// our core open and the enemy in it, everyone at home to it. The
+/// attackers push the side's one target ([`push_target`]): once our first
+/// wave is out, two of them by each free truck take it there; at home
 /// the rest gather at the gate, `rally` (its [`rally_point`]), and go
 /// from it together; away from home they push on.
 fn siege_plan(w: &World, side: usize, rally: V3) -> [Job; MAX_FIGHTERS] {
@@ -596,13 +597,16 @@ fn siege_plan(w: &World, side: usize, rally: V3) -> [Job; MAX_FIGHTERS] {
             }
         }
     }
-    // Trucks, by attackers only and two aboard or none: a driver alone
+    // Trucks, by attackers only and two aboard or none, once our first
+    // wave is out (no truck at a ring before its keeper): a driver alone
     // takes one aboard and waits for it; else the free truck nearest the
     // target with two near it, while the side has fewer than
     // [`SIEGE_TRUCKS`] at the wheel.
+    let played = ticks(w.rules.time_limit_ms).saturating_sub(w.clock);
+    let waved = w.rules.time_limit_ms == 0 || played >= ticks(MINION_FIRST_MS);
     let mut crew = [false; MAX_FIGHTERS];
     for s in 0..MAX_FIGHTERS {
-        crew[s] = free[s] && att[s];
+        crew[s] = free[s] && att[s] && waved;
     }
     let crewable = |v: &crate::vehicle::Vehicle| {
         v.active
@@ -758,8 +762,9 @@ pub fn push_target(w: &World, side: usize) -> usize {
 
 /// The node of side `side`'s a rover at `from` answers: the nearest one
 /// standing whose ring the enemy is in (rising or held), else the nearest
-/// overloaded at all, else our first generator standing, else our core.
-/// Only what every player sees of the rings, never where the enemy is.
+/// overloaded at all, else the first of ours standing in the order the
+/// enemy pushes them ([`PUSH_ORDER`]), else our core. Only what every
+/// player sees of the rings, never where the enemy is.
 fn rover_node(w: &World, side: usize, from: V3) -> usize {
     let core = node_of(side, SIEGE_GENS);
     let Some(at) = w.map.siege else {
@@ -779,7 +784,12 @@ fn rover_node(w: &World, side: usize, from: V3) -> usize {
     };
     nearest(&|n| matches!(w.nodes[n].held, NODE_RISING | NODE_CONTESTED))
         .or_else(|| nearest(&|n| w.nodes[n].load > 0))
-        .or_else(|| (0..SIEGE_GENS).map(|k| node_of(side, k)).find(|&n| !w.nodes[n].broken))
+        .or_else(|| {
+            PUSH_ORDER[side ^ 1]
+                .iter()
+                .map(|&k| node_of(side, k))
+                .find(|&n| !w.nodes[n].broken)
+        })
         .unwrap_or(core)
 }
 
