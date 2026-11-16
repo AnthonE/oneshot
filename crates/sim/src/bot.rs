@@ -252,8 +252,14 @@ const RING_M: f32 = 1.5;
 const RING_STRAFE: i8 = 32;
 /// Spare defenders that answer a ring the enemy stands in.
 const ROVERS: usize = 1;
-/// A truck on a push parks this short of its way's end, out of the ring.
+/// Trucks a side's bots crew at once (the other is left for people).
+const SIEGE_TRUCKS: usize = 1;
+/// No hull this near an enemy node still standing is crewed.
+const AT_NODE_M: f32 = 45.0;
+/// A truck on a push parks this short of its way's end, out of the ring,
+/// and parked there this long its driver gets out to push.
 const SIEGE_PARK_M: f32 = 10.0;
+const DRIVER_OUT_MS: u32 = 1000;
 /// How far a bot goes out of its way for a gun it wants, and how far above
 /// or below it may be: on its own level, as it walks there straight.
 const LOOT_M: f32 = 20.0;
@@ -514,9 +520,9 @@ fn nearest_free(w: &World, free: &[bool; MAX_FIGHTERS], at: V3, within: f32) -> 
 /// defender roves to the ring the enemy is in (one keeps our core once it
 /// is open), and the rest attack; with our core open and the enemy in
 /// it, everyone at home to it. The attackers push the side's one target
-/// ([`push_target`]): at home they gather at the gate, `rally` (its
-/// [`rally_point`]), and go from it together; away from home they push
-/// on.
+/// ([`push_target`]): two of them by a free truck take it there; at home
+/// the rest gather at the gate, `rally` (its [`rally_point`]), and go
+/// from it together; away from home they push on.
 fn siege_plan(w: &World, side: usize, rally: V3) -> [Job; MAX_FIGHTERS] {
     let mut jobs = [Job::Free; MAX_FIGHTERS];
     let mut free = [false; MAX_FIGHTERS];
@@ -524,9 +530,9 @@ fn siege_plan(w: &World, side: usize, rally: V3) -> [Job; MAX_FIGHTERS] {
         free[s] = f.active() && (f.team as usize & 1) == side;
     }
     let t = push_target(w, side) as u8;
-    if w.map.siege.is_none() {
+    let Some(at) = w.map.siege else {
         return jobs;
-    }
+    };
     // Whoever rides stays in: a truck's driver takes it to the target.
     for (i, v) in w.vehicles.iter().enumerate() {
         if !v.active {
@@ -586,6 +592,62 @@ fn siege_plan(w: &World, side: usize, rally: V3) -> [Job; MAX_FIGHTERS] {
             }
         }
     }
+    // Trucks, by attackers only and two aboard or none: a driver alone
+    // takes one aboard and waits for it; else the free truck nearest the
+    // target with two near it, while the side has fewer than
+    // [`SIEGE_TRUCKS`] at the wheel.
+    let mut crew = [false; MAX_FIGHTERS];
+    for s in 0..MAX_FIGHTERS {
+        crew[s] = free[s] && att[s];
+    }
+    let crewable = |v: &crate::vehicle::Vehicle| {
+        v.active
+            && v.kind == TRUCK
+            && v.health * BAIL_HEALTH >= v.spec().health
+            && !enemy_near(w, side, v.pos, AT_NODE_M)
+    };
+    let ours = |d: usize| (w.fighters[d].team as usize & 1) == side;
+    let mut driven = 0;
+    for (i, v) in w.vehicles.iter().enumerate() {
+        let Some(d) = v.driver().filter(|&d| v.active && v.kind == TRUCK && ours(d)) else {
+            continue;
+        };
+        driven += 1;
+        if !crewable(v) || v.seats[PASSENGER] != 0 {
+            continue;
+        }
+        if let Job::Drive(_, trip @ Trip::Push(_), _) = jobs[d] {
+            if let Some(p) = nearest_free(w, &crew, v.pos, CREW_M) {
+                free[p] = false;
+                crew[p] = false;
+                jobs[p] = Job::Board(i as u8, PASSENGER as u8);
+                jobs[d] = Job::Drive(i as u8, trip, true);
+            }
+        }
+    }
+    while driven < SIEGE_TRUCKS {
+        let mut pick = None;
+        let mut bd = f32::INFINITY;
+        for (i, v) in w.vehicles.iter().enumerate() {
+            let d = (at[t as usize] - v.pos).flat().len();
+            if crewable(v) && v.seats == [0; 2] && two_near(w, &crew, v.pos) && d < bd {
+                pick = Some(i);
+                bd = d;
+            }
+        }
+        let Some(i) = pick else {
+            break;
+        };
+        let v = &w.vehicles[i];
+        for seat in [DRIVER, PASSENGER] {
+            if let Some(s) = nearest_free(w, &crew, v.pos, CREW_M) {
+                free[s] = false;
+                crew[s] = false;
+                jobs[s] = Job::Board(i as u8, seat as u8);
+            }
+        }
+        driven += 1;
+    }
     // The push: from the gate once enough are gathered there (a pair, as
     // our wave comes out), by whoever is away from home.
     let at_rally = |f: &Fighter| {
@@ -629,6 +691,24 @@ fn node_of(side: usize, k: usize) -> usize {
 /// its shield down.
 fn standing(w: &World, n: usize) -> bool {
     !w.nodes[n].broken && (!World::is_core(n) || w.core_open(World::node_side(n)))
+}
+
+/// Whether an enemy node of side `side`'s, still standing, is within `r`
+/// of `p` (flat).
+fn enemy_near(w: &World, side: usize, p: V3, r: f32) -> bool {
+    let Some(at) = w.map.siege else {
+        return false;
+    };
+    (0..=SIEGE_GENS).any(|k| {
+        let n = node_of(side ^ 1, k);
+        standing(w, n) && (at[n] - p).flat().len() < r
+    })
+}
+
+/// Whether two of `crew` at least are within [`CREW_M`] of `p` (flat).
+fn two_near(w: &World, crew: &[bool; MAX_FIGHTERS], p: V3) -> bool {
+    let near = (0..MAX_FIGHTERS).filter(|&s| crew[s] && (w.fighters[s].body.pos - p).flat().len() < CREW_M);
+    near.count() >= 2
 }
 
 /// Whether `p` is at side `side`'s home: near (flat) a generator of ours
@@ -1654,8 +1734,9 @@ impl Bot {
     }
 
     /// A rider gets out: its vehicle stopped by the enemy's flag (to go
-    /// for it), or by home with the flag aboard; nobody at the wheel; the
-    /// hull nearly gone; or a job that isn't riding this.
+    /// for it), or by home with the flag aboard; in Siege, stopped by an
+    /// enemy node; nobody at the wheel; the hull nearly gone; or a job that
+    /// isn't riding this.
     fn get_off(&mut self, w: &World, slot: usize, vi: usize) -> bool {
         let me = &w.fighters[slot];
         let v = &w.vehicles[vi];
@@ -1663,6 +1744,10 @@ impl Bot {
         let stopped = v.vel.flat().len() < 1.5;
         if v.driver().is_none() || v.health * BAIL_HEALTH < v.spec().health {
             return true;
+        }
+        // Siege: stopped by an enemy node, out to push it.
+        if siege_on(w) {
+            return stopped && enemy_near(w, side, v.pos, DROP_M);
         }
         let Some(b) = w.map.flags.filter(|_| w.rules.ctf) else {
             return false;
@@ -1755,8 +1840,8 @@ impl Bot {
 
     /// At the controls of vehicle `vi`: a truck driven, a skimmer or a
     /// flier piloted, where its trip takes it; out when the hull is nearly
-    /// gone, it is stuck for good, or it has waited by the enemy's flag
-    /// long enough.
+    /// gone, it is stuck for good, it has waited by the enemy's flag long
+    /// enough, or it has parked by the node it pushes (or jammed near it).
     #[allow(clippy::too_many_arguments)]
     fn pilot(
         &mut self,
@@ -1779,10 +1864,23 @@ impl Bot {
         // waits to fetch them.)
         self.crewed |= v.seats[PASSENGER] != 0;
         let alone = self.parked as u32 > TICK_HZ && !self.crewed && !wait;
+        // Pushing: parked by the node, or jammed short of it, out to push
+        // it on foot.
+        let pushed = match trip {
+            Trip::Push(n) => {
+                self.parked as u32 > ticks(DRIVER_OUT_MS)
+                    || (self.backing > 0
+                        && w.map
+                            .siege
+                            .is_some_and(|at| (at[n as usize] - v.pos).flat().len() < DROP_M))
+            }
+            _ => false,
+        };
         let leave = v.health * BAIL_HEALTH < v.spec().health
             || self.jams >= JAMS
             || self.parked as u32 > ticks(PARK_MS)
             || alone
+            || pushed
             || (v.kind == FLIER && !flies(w));
         if leave {
             self.jams = 0;
@@ -1923,7 +2021,7 @@ impl Bot {
             self.stuck = 0;
             self.was = V3::ZERO;
             self.was_for = 0;
-            if at_end && trip == Trip::Attack && w.rules.ctf {
+            if at_end && ((trip == Trip::Attack && w.rules.ctf) || matches!(trip, Trip::Push(_))) {
                 self.parked = self.parked.saturating_add(1);
             }
             return inp;
