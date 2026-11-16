@@ -29,6 +29,9 @@ pub struct Controls<'a> {
     pub mouse: &'a ButtonInput<MouseButton>,
     /// The wheel moved this frame.
     pub wheel: bool,
+    /// The touch controls' buttons held and pressed this frame, by
+    /// `Action` bit (`touch.rs`): a bind every action has.
+    pub touch: (u32, u32),
 }
 
 impl<'a> Controls<'a> {
@@ -37,6 +40,15 @@ impl<'a> Controls<'a> {
             keys,
             mouse,
             wheel: wheel != 0.0,
+            touch: (0, 0),
+        }
+    }
+
+    /// And what a finger holds.
+    pub fn with_touch(self, t: &crate::touch::Touch) -> Self {
+        Self {
+            touch: (t.held(), t.just()),
+            ..self
         }
     }
 }
@@ -447,11 +459,11 @@ impl Binds {
     }
 
     pub fn pressed(&self, a: Action, c: &Controls) -> bool {
-        self.each(a).any(|b| b.pressed(c))
+        c.touch.0 & 1 << a as u32 != 0 || self.each(a).any(|b| b.pressed(c))
     }
 
     pub fn just_pressed(&self, a: Action, c: &Controls) -> bool {
-        self.each(a).any(|b| b.just_pressed(c))
+        c.touch.1 & 1 << a as u32 != 0 || self.each(a).any(|b| b.just_pressed(c))
     }
 
     /// Put `bind` in `a`'s `slot`. A bind does one thing: if another action

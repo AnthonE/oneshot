@@ -415,6 +415,11 @@ pub struct BackPlate;
 /// Driving or riding: how to get out.
 #[derive(Component)]
 pub struct RideText;
+
+/// The clock, the map and the scores, bottom right; between the thumbs at
+/// the bottom's middle on a touchscreen ([`score_corner`]).
+#[derive(Component)]
+pub struct ScoreCorner;
 /// Bottom right: the clock, the map (and gun game's rung), and the two
 /// score rows: their number, swatch, bar and fill, and our marker.
 #[derive(Component)]
@@ -890,6 +895,7 @@ pub fn setup(mut commands: Commands) {
     commands
         .spawn((
             ChildOf(root),
+            ScoreCorner,
             Node {
                 flex_direction: FlexDirection::Column,
                 align_items: AlignItems::FlexEnd,
@@ -1859,7 +1865,7 @@ pub struct GearText {
 #[allow(clippy::too_many_arguments, clippy::type_complexity)]
 pub fn gear(
     link: NonSend<crate::LinkRes>,
-    binds: Res<crate::binds::Binds>,
+    (binds, touch): (Res<crate::binds::Binds>, Res<crate::touch::Touch>),
     mut boxes: Query<(&GrenBox, &mut ImageNode)>,
     mut texts: Query<(
         &mut Text,
@@ -1918,8 +1924,8 @@ pub fn gear(
     for mut n in back_plate.iter_mut() {
         set_display(&mut n, carried);
     }
-    let out = binds.key(crate::binds::Action::Use);
-    let swap = binds.key(crate::binds::Action::Swap);
+    let out = crate::touch::key(&binds, &touch, crate::binds::Action::Use);
+    let swap = crate::touch::key(&binds, &touch, crate::binds::Action::Swap);
     // The enemy's flag at our feet, on the floor or at its base.
     let at = s.core.own().1;
     let flag_here = !f.flag
@@ -2351,7 +2357,7 @@ pub fn reticle_tint(seen: Res<crate::Seen>, mut q: Query<&mut BackgroundColor, W
 #[allow(clippy::type_complexity)]
 pub fn prompt(
     link: NonSend<crate::LinkRes>,
-    binds: Res<crate::binds::Binds>,
+    (binds, touch): (Res<crate::binds::Binds>, Res<crate::touch::Touch>),
     seen: Res<crate::Seen>,
     mut row: Query<&mut Visibility, With<PromptRow>>,
     mut q: Query<
@@ -2361,7 +2367,7 @@ pub fn prompt(
     mut said: Local<Option<(&'static str, crate::items::Offer)>>,
 ) {
     let s = link.0.session();
-    let key = binds.key(crate::binds::Action::Use);
+    let key = crate::touch::key(&binds, &touch, crate::binds::Action::Use);
     let offer = s
         .ready
         .then(|| crate::items::offer(&s.core, &seen.vehicles))
@@ -2393,6 +2399,32 @@ pub fn prompt(
         // A ride has no gun: no gap after its verb.
         set_display(&mut n, !v.is_empty());
         set_text(&mut t, v);
+    }
+}
+
+/// The clock and the scores out of the touch controls' corner: centred at
+/// the bottom while they are on, back in the corner when they go.
+pub fn score_corner(
+    touch: Res<crate::touch::Touch>,
+    mut q: Query<(&mut Node, &mut UiTransform), With<ScoreCorner>>,
+    mut was: Local<Option<bool>>,
+) {
+    if *was == Some(touch.on) {
+        return;
+    }
+    *was = Some(touch.on);
+    for (mut n, mut t) in &mut q {
+        if touch.on {
+            n.left = Val::Percent(50.0);
+            n.right = Val::Auto;
+            n.align_items = AlignItems::Center;
+            t.translation = Val2::percent(-50.0, 0.0);
+        } else {
+            n.left = Val::Auto;
+            n.right = Val::Px(EDGE_PX);
+            n.align_items = AlignItems::FlexEnd;
+            t.translation = Val2::ZERO;
+        }
     }
 }
 
