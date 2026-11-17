@@ -8,8 +8,11 @@
 //! for the enemy's flag, who carries it home and who keeps by the carrier,
 //! who runs down the enemy carrying ours, who holds home and who stands
 //! over our flag where it lies; anywhere with vehicles, who drives which,
-//! who rides with them and where the driver takes them. Each finds its way
-//! by the map's waypoints ([`crate::nav`]), on foot or at the wheel.
+//! who rides with them and where the driver takes them. In Siege: one
+//! enemy node a side pushes, who gathers at the gate and goes with whom,
+//! who keeps each generator, and who answers a ring the enemy stands in.
+//! Each finds its way by the map's waypoints ([`crate::nav`]), on foot or
+//! at the wheel.
 //!
 //! It looks around (the rays: who it can see, a gun to take, the way) only
 //! every [`DECIDE_EVERY`] ticks, the bots staggered so they never all look
@@ -25,14 +28,13 @@ use crate::input::*;
 use crate::nav::Nav;
 use crate::rng::Pcg32;
 use crate::vehicle::{DRIVER, FLIER, PASSENGER, SKIMMER, TRUCK};
-use crate::world::{Phase, Rules, World, FLAG_DOWN, FLAG_HELD, FLAG_HOME};
+use crate::world::{Phase, Rules, World, FLAG_DOWN, FLAG_HELD, FLAG_HOME, NODE_CONTESTED, NODE_RISING};
 
 /// What its side's plan asks of a bot ([`plan`]). Seats and vehicles by
 /// their slots.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Job {
-    /// Nothing asked: its own way (a gun to take, its roam point; Siege's
-    /// objective by its seat).
+    /// Nothing asked: its own way (a gun to take, its roam point).
     Free,
     /// Take the enemy's flag, at home or where it lies.
     Attack,
@@ -53,6 +55,15 @@ pub enum Job {
     Drive(u8, Trip, bool),
     /// In this vehicle's passenger seat, fighting from it.
     Ride(u8),
+    /// Siege: overload enemy node `n` with the side's push. Far fights are
+    /// let be on the way; it stays in the node's ring till it breaks.
+    Push(u8),
+    /// Siege: at home, wait at the side's gate for the push on enemy node
+    /// `n` to go.
+    Rally(u8),
+    /// Siege: stand in our node `n`'s ring, as its keeper, the rover or the
+    /// core's keeper.
+    Hold(u8),
 }
 
 /// Where a driver takes its vehicle.
@@ -69,6 +80,9 @@ pub enum Trip {
     Home,
     /// After the enemy carrying our flag.
     Hunt(u8),
+    /// Siege: to enemy node `n` as near as a truck goes, parked short of
+    /// it, its crew out.
+    Push(u8),
 }
 
 /// Where a bot walks: a spot of the map's ([`Nav`]'s, its field known), or
@@ -138,6 +152,14 @@ pub struct Bot {
     /// left walking along it instead.
     foot_stuck: u16,
     detour: u16,
+    /// Siege: the point at the gate its Rally job stands about, and what
+    /// it was walked for ([`Bot::gate`]; `u32::MAX`: nothing yet).
+    rally: V3,
+    rally_for: u32,
+    /// Siege: the enemy node it has set out to push in this life (255:
+    /// none yet), and ticks it has had its Rally job.
+    out: u8,
+    rallied: u16,
 }
 
 /// No tick yet.
@@ -198,6 +220,62 @@ const PARK_M: f32 = 6.0;
 const DROP_M: f32 = 40.0;
 /// A hull this broken is left.
 const BAIL_HEALTH: i32 = 4;
+/// On foot this fast (flat), a body is in the air off a launcher.
+const THROWN: f32 = RUN * 2.0;
+/// Siege: each side's order of the enemy's generators to push; gen 0 (the
+/// minions' first, on Dry Fork under two towers) last.
+const PUSH_ORDER: [[usize; SIEGE_GENS]; 2] = [[1, 2, 0], [1, 2, 0]];
+/// An enemy generator overloaded this far (percent of its full) is
+/// finished first.
+const FINISH_PCT: u32 = 25;
+/// A push goes from the gate with this many gathered there (with fewer
+/// attackers on foot, all of them), or this many while the side's wave is
+/// just out, this long after it came out.
+const PUSH_GROUP: usize = 3;
+const PUSH_PAIR: usize = 2;
+const PUSH_CUE_MS: u32 = 8000;
+/// Gathered: on foot this near the rally (flat), and this far above or
+/// below it at most.
+const RALLY_M: f32 = 12.0;
+const RALLY_RISE: f32 = 3.0;
+/// The walk from our core out to the gate ([`rally_point`]): its step, its
+/// steps at most, and how many steps back from where it ends the rally is
+/// (off a launcher's pad).
+const RALLY_STEP_M: f32 = 2.0;
+const RALLY_WALK: usize = 128;
+const RALLY_BACK: usize = 3;
+/// Each one's spot about the rally is this far from it; farther off it
+/// than this, it walks back while fighting.
+const RALLY_SPREAD_M: f32 = 2.5;
+const RALLY_LEASH_M: f32 = 8.0;
+/// No spot about the rally is this near (flat) a launcher's pad, and a bot
+/// fighting at the rally this near one walks back to its spot.
+const RALLY_PAD_M: f32 = 3.0;
+/// A bot goes to the gate and waits there this long at most (a wave's
+/// time), then goes with whoever is there, or alone.
+const RALLY_MAX_MS: u32 = 30_000;
+/// Home: this near (flat) a generator of ours still standing, or our core.
+const HOME_M: f32 = 40.0;
+/// Each one's spot in a ring is this far from the node, and it keeps
+/// within this of its spot.
+const RING_M: f32 = 1.5;
+/// Fighting in a ring or at the rally: its strafe, of the stick's full
+/// tilt.
+const RING_STRAFE: i8 = 32;
+/// An enemy minion this near (flat) the node of a ring a bot keeps or
+/// pushes is shot before any fighter farther than this.
+const RING_MINION_M: f32 = NODE_REACH + 3.0;
+const RING_MINION_FIRST_M: f32 = 12.0;
+/// Spare defenders that answer a ring the enemy stands in.
+const ROVERS: usize = 1;
+/// Trucks a side's bots crew at once: on today's maps, both of the side's.
+const SIEGE_TRUCKS: usize = 2;
+/// No hull this near an enemy node still standing is crewed.
+const AT_NODE_M: f32 = 45.0;
+/// A truck on a push parks this short of its way's end, out of the ring,
+/// and parked there this long its driver gets out to push.
+const SIEGE_PARK_M: f32 = 10.0;
+const DRIVER_OUT_MS: u32 = 1000;
 /// How far a bot goes out of its way for a gun it wants, and how far above
 /// or below it may be: on its own level, as it walks there straight.
 const LOOT_M: f32 = 20.0;
@@ -252,6 +330,9 @@ const EDGE_TURNS: [(f32, f32); 6] = [(H, H), (-H, H), (1.0, 0.0), (-1.0, 0.0), (
 /// please). A pure function of the world, so every bot of the side makes
 /// the same one.
 pub fn plan(w: &World, side: usize) -> [Job; MAX_FIGHTERS] {
+    if siege_on(w) {
+        return siege_plan(w, side, rally_point(w, side, push_target(w, side)));
+    }
     let mut jobs = [Job::Free; MAX_FIGHTERS];
     let mut free = [false; MAX_FIGHTERS];
     for (s, f) in w.fighters.iter().enumerate() {
@@ -450,6 +531,359 @@ fn nearest_free(w: &World, free: &[bool; MAX_FIGHTERS], at: V3, within: f32) -> 
     best
 }
 
+/// Siege's plan of side `side` ([`plan`]'s): whoever rides stays in; by
+/// seat, every generator of ours still standing has a keeper, a spare
+/// defender roves to the ring the enemy is in, else waits where their push
+/// is for (one keeps our core once it is open), and the rest attack; with
+/// our core open and the enemy in it, everyone at home to it. The
+/// attackers push the side's one target ([`push_target`]): once our first
+/// wave is out, two of them (not thrown) by each free truck take it
+/// there; at home the rest gather at the gate, `rally` (its
+/// [`rally_point`]), and go from it together; away from home they push
+/// on.
+fn siege_plan(w: &World, side: usize, rally: V3) -> [Job; MAX_FIGHTERS] {
+    let mut jobs = [Job::Free; MAX_FIGHTERS];
+    let mut free = [false; MAX_FIGHTERS];
+    for (s, f) in w.fighters.iter().enumerate() {
+        free[s] = f.active() && (f.team as usize & 1) == side;
+    }
+    let t = push_target(w, side) as u8;
+    let Some(at) = w.map.siege else {
+        return jobs;
+    };
+    // Whoever rides stays in: a truck's driver takes it to the target.
+    for (i, v) in w.vehicles.iter().enumerate() {
+        if !v.active {
+            continue;
+        }
+        let seat = |k: usize| v.seats[k].checked_sub(1).map(usize::from).filter(|&s| free[s]);
+        let rider = seat(PASSENGER);
+        if let Some(d) = seat(DRIVER) {
+            free[d] = false;
+            let trip = if v.kind == TRUCK { Trip::Push(t) } else { Trip::Roam };
+            jobs[d] = Job::Drive(i as u8, trip, false);
+        }
+        if let Some(p) = rider {
+            free[p] = false;
+            jobs[p] = Job::Ride(i as u8);
+        }
+    }
+    // Roles by seat, alive or dead, so they never shift.
+    let mut att = [false; MAX_FIGHTERS];
+    let open = w.core_open(side);
+    let core = node_of(side, SIEGE_GENS);
+    let mut spare = 0;
+    for (s, f) in w.fighters.iter().enumerate() {
+        if !f.seated || (f.team as usize & 1) != side {
+            continue;
+        }
+        if attacker(s) {
+            att[s] = true;
+            continue;
+        }
+        let k = s / 4;
+        let job = if k < SIEGE_GENS && !w.nodes[node_of(side, k)].broken {
+            Job::Hold(node_of(side, k) as u8)
+        } else {
+            let r = spare;
+            spare += 1;
+            if open && r == 0 {
+                Job::Hold(core as u8)
+            } else if r - (open as usize) < ROVERS {
+                Job::Hold(rover_node(w, side, f.body.pos) as u8)
+            } else {
+                att[s] = true;
+                continue;
+            }
+        };
+        if free[s] {
+            free[s] = false;
+            jobs[s] = job;
+        }
+    }
+    // Our core open with the enemy in its ring: all hands at home (or
+    // just back from the dead at a spawn of ours) to it.
+    if open && matches!(w.nodes[core].held, NODE_RISING | NODE_CONTESTED) {
+        for (s, f) in w.fighters.iter().enumerate() {
+            if free[s] && att[s] && (home(w, side, f.body.pos) || spawned(w, side, f.body.pos)) {
+                free[s] = false;
+                jobs[s] = Job::Hold(core as u8);
+            }
+        }
+    }
+    // Trucks, by attackers only and two aboard or none, once our first
+    // wave is out (no truck at a ring before its keeper): a driver alone
+    // takes one aboard and waits for it; else the free truck nearest the
+    // target with two near it, while the side has fewer than
+    // [`SIEGE_TRUCKS`] at the wheel.
+    let played = ticks(w.rules.time_limit_ms).saturating_sub(w.clock);
+    let waved = w.rules.time_limit_ms == 0 || played >= ticks(MINION_FIRST_MS);
+    // Not one a launcher has thrown: it would land far from the truck.
+    let mut crew = [false; MAX_FIGHTERS];
+    for (s, f) in w.fighters.iter().enumerate() {
+        crew[s] = free[s] && att[s] && waved && f.body.vel.flat().len() < THROWN;
+    }
+    let crewable = |v: &crate::vehicle::Vehicle| {
+        v.active
+            && v.kind == TRUCK
+            && v.health * BAIL_HEALTH >= v.spec().health
+            && !enemy_near(w, side, v.pos, AT_NODE_M)
+    };
+    let ours = |d: usize| (w.fighters[d].team as usize & 1) == side;
+    let mut driven = 0;
+    for (i, v) in w.vehicles.iter().enumerate() {
+        let Some(d) = v.driver().filter(|&d| v.active && v.kind == TRUCK && ours(d)) else {
+            continue;
+        };
+        driven += 1;
+        if !crewable(v) || v.seats[PASSENGER] != 0 {
+            continue;
+        }
+        if let Job::Drive(_, trip @ Trip::Push(_), _) = jobs[d] {
+            if let Some(p) = nearest_free(w, &crew, v.pos, CREW_M) {
+                free[p] = false;
+                crew[p] = false;
+                jobs[p] = Job::Board(i as u8, PASSENGER as u8);
+                jobs[d] = Job::Drive(i as u8, trip, true);
+            }
+        }
+    }
+    let mut picked = [false; MAX_VEHICLES];
+    while driven < SIEGE_TRUCKS {
+        let mut pick = None;
+        let mut bd = f32::INFINITY;
+        for (i, v) in w.vehicles.iter().enumerate() {
+            let d = (at[t as usize] - v.pos).flat().len();
+            if !picked[i] && crewable(v) && v.seats == [0; 2] && two_near(w, &crew, v.pos) && d < bd {
+                pick = Some(i);
+                bd = d;
+            }
+        }
+        let Some(i) = pick else {
+            break;
+        };
+        picked[i] = true;
+        let v = &w.vehicles[i];
+        for seat in [DRIVER, PASSENGER] {
+            if let Some(s) = nearest_free(w, &crew, v.pos, CREW_M) {
+                free[s] = false;
+                crew[s] = false;
+                jobs[s] = Job::Board(i as u8, seat as u8);
+            }
+        }
+        driven += 1;
+    }
+    // The push: from the gate once enough are gathered there (a pair, as
+    // our wave comes out), by whoever is away from home.
+    let at_rally = |f: &Fighter| {
+        let d = f.body.pos - rally;
+        f.riding().is_none() && d.flat().len() < RALLY_M && fmath::fabs(d.y) < RALLY_RISE
+    };
+    let (mut seats, mut gathered) = (0, 0);
+    for (s, f) in w.fighters.iter().enumerate() {
+        if att[s] && jobs[s] == Job::Free {
+            seats += 1;
+            gathered += (free[s] && at_rally(f)) as usize;
+        }
+    }
+    let need = PUSH_GROUP.min(seats).max(1);
+    let cue = w.wave_in > ticks(MINION_WAVE_MS) - ticks(PUSH_CUE_MS);
+    let go = gathered >= need || (cue && gathered >= PUSH_PAIR);
+    for (s, f) in w.fighters.iter().enumerate() {
+        if free[s] && att[s] {
+            jobs[s] = if !home(w, side, f.body.pos) || (go && at_rally(f)) {
+                Job::Push(t)
+            } else {
+                Job::Rally(t)
+            };
+        }
+    }
+    jobs
+}
+
+/// Siege is played here: the mode, sides and a map with nodes (as the
+/// world's own test).
+fn siege_on(w: &World) -> bool {
+    w.rules.siege && w.rules.teams && w.map.siege.is_some()
+}
+
+/// Side `side`'s node `k`: its generators, then its core.
+fn node_of(side: usize, k: usize) -> usize {
+    side * (SIEGE_GENS + 1) + k
+}
+
+/// Whether node `n` can be overloaded: not broken, and a core only with
+/// its shield down.
+fn standing(w: &World, n: usize) -> bool {
+    !w.nodes[n].broken && (!World::is_core(n) || w.core_open(World::node_side(n)))
+}
+
+/// Whether an enemy node of side `side`'s, still standing, is within `r`
+/// of `p` (flat).
+fn enemy_near(w: &World, side: usize, p: V3, r: f32) -> bool {
+    let Some(at) = w.map.siege else {
+        return false;
+    };
+    (0..=SIEGE_GENS).any(|k| {
+        let n = node_of(side ^ 1, k);
+        standing(w, n) && (at[n] - p).flat().len() < r
+    })
+}
+
+/// Whether two of `crew` at least are within [`CREW_M`] of `p` (flat).
+fn two_near(w: &World, crew: &[bool; MAX_FIGHTERS], p: V3) -> bool {
+    let near = (0..MAX_FIGHTERS).filter(|&s| crew[s] && (w.fighters[s].body.pos - p).flat().len() < CREW_M);
+    near.count() >= 2
+}
+
+/// Whether `p` is near (flat) a spawn of side `side`'s, as near as home
+/// ([`HOME_M`]).
+fn spawned(w: &World, side: usize, p: V3) -> bool {
+    w.map
+        .spawns
+        .iter()
+        .any(|sp| sp.team as usize == side && (sp.pos - p).flat().len() < HOME_M)
+}
+
+/// Whether `p` is at side `side`'s home: near (flat) a generator of ours
+/// still standing, or our core.
+fn home(w: &World, side: usize, p: V3) -> bool {
+    let Some(at) = w.map.siege else {
+        return false;
+    };
+    (0..=SIEGE_GENS).any(|k| {
+        let n = node_of(side, k);
+        (k == SIEGE_GENS || !w.nodes[n].broken) && (at[n] - p).flat().len() < HOME_M
+    })
+}
+
+/// Siege: the enemy node side `side` pushes. Their core once every
+/// generator of theirs is broken; else the generator of theirs overloaded
+/// most, if one is [`FINISH_PCT`] there; else the first of theirs standing
+/// in [`PUSH_ORDER`]. In sudden death too a generator still standing goes
+/// before their core: it scores, and the lead wins when time runs out. It
+/// changes only on a break or a push well begun.
+pub fn push_target(w: &World, side: usize) -> usize {
+    let theirs = side ^ 1;
+    let core = node_of(theirs, SIEGE_GENS);
+    if (0..SIEGE_GENS).all(|k| w.nodes[node_of(theirs, k)].broken) {
+        return core;
+    }
+    let (mut best, mut most) = (None, 0);
+    for k in 0..SIEGE_GENS {
+        let n = node_of(theirs, k);
+        let node = &w.nodes[n];
+        if !node.broken && node.load * 100 >= World::node_full(n) * FINISH_PCT && node.load > most {
+            best = Some(n);
+            most = node.load;
+        }
+    }
+    if let Some(n) = best {
+        return n;
+    }
+    PUSH_ORDER[side]
+        .iter()
+        .map(|&k| node_of(theirs, k))
+        .find(|&n| !w.nodes[n].broken)
+        .unwrap_or(core)
+}
+
+/// The node of side `side`'s a rover at `from` answers: the nearest one
+/// standing whose ring the enemy is in (rising or held), else the one the
+/// enemy's push is for ([`push_target`] of theirs), a second keeper there.
+/// Only what every player sees of the rings, never where the enemy is.
+fn rover_node(w: &World, side: usize, from: V3) -> usize {
+    let mut best = push_target(w, side ^ 1);
+    let Some(at) = w.map.siege else {
+        return best;
+    };
+    let mut bd = f32::INFINITY;
+    for k in 0..=SIEGE_GENS {
+        let n = node_of(side, k);
+        let d = (at[n] - from).flat().len();
+        if standing(w, n) && matches!(w.nodes[n].held, NODE_RISING | NODE_CONTESTED) && d < bd {
+            best = n;
+            bd = d;
+        }
+    }
+    best
+}
+
+/// Siege: where side `side`'s push on enemy node `t` gathers. The walk
+/// from our core along the way to `t` (by the foot waypoints), to where it
+/// first meets a launcher's pad (the gate) or would leave home; the rally
+/// is [`RALLY_BACK`] steps back from there, on the way it came, off the
+/// pad. Our core itself on a walk shorter than that, or with no
+/// waypoints.
+pub fn rally_point(w: &World, side: usize, t: usize) -> V3 {
+    let Some(at) = w.map.siege else {
+        return V3::ZERO;
+    };
+    let core = at[node_of(side, SIEGE_GENS)];
+    let Some(nav) = Nav::of(&w.map) else {
+        return core;
+    };
+    let spot = nav.siege(t);
+    let (mut p, mut way) = (core, u16::MAX);
+    // Where the walk was, the last step first.
+    let mut trail = [core; RALLY_BACK];
+    for _ in 0..RALLY_WALK {
+        let Some(q) = nav.foot.toward(&w.map, spot, p, &mut way) else {
+            break;
+        };
+        let d = q - p;
+        let l = d.len();
+        // On a launcher's pad, the way holds there: the gate.
+        if l < 0.5 {
+            break;
+        }
+        let np = if l > RALLY_STEP_M {
+            p + d * (RALLY_STEP_M / l)
+        } else {
+            q
+        };
+        if !home(w, side, np) {
+            break;
+        }
+        for i in (1..RALLY_BACK).rev() {
+            trail[i] = trail[i - 1];
+        }
+        trail[0] = p;
+        p = np;
+    }
+    trail[RALLY_BACK - 1]
+}
+
+/// Seat `slot`'s spot about `rally`: [`RALLY_SPREAD_M`] from it, each of
+/// a side its own way (the golden angle, as a post's), or the other way if
+/// that is near a launcher's pad ([`RALLY_PAD_M`]).
+pub fn rally_spot(w: &World, rally: V3, slot: usize) -> V3 {
+    let a = (slot / 2) as f32 * 2.4;
+    let d = V3::new(fmath::cos(a), 0.0, fmath::sin(a)) * RALLY_SPREAD_M;
+    if off_pads(w, rally + d, RALLY_PAD_M) {
+        rally + d
+    } else {
+        rally - d
+    }
+}
+
+/// Whether `p` is farther than `r` (flat) from every launcher's pad.
+fn off_pads(w: &World, p: V3, r: f32) -> bool {
+    w.map.launchers.iter().all(|l| {
+        let (lo, hi) = (l.area.min, l.area.max);
+        let dx = (lo.x - p.x).max(p.x - hi.x).max(0.0);
+        let dz = (lo.z - p.z).max(p.z - hi.z).max(0.0);
+        dx * dx + dz * dz > r * r
+    })
+}
+
+/// Seat `slot`'s spot in node `n`'s ring: [`RING_M`] from the node, each
+/// of a side its own way (the golden angle, as a post's).
+fn ring_spot(at: &[V3; SIEGE_NODES], n: usize, slot: usize) -> V3 {
+    let a = (slot / 2) as f32 * 2.4;
+    at[n] + V3::new(fmath::cos(a) * RING_M, 0.0, fmath::sin(a) * RING_M)
+}
+
 /// Turns `from` toward `want` (both in turns), at most `max` turns.
 fn turn(from: f32, want: f32, max: f32) -> f32 {
     let mut d = want - from;
@@ -495,6 +929,10 @@ impl Bot {
             crewed: false,
             foot_stuck: 0,
             detour: 0,
+            rally: V3::ZERO,
+            rally_for: u32::MAX,
+            out: 255,
+            rallied: 0,
         }
     }
 
@@ -588,38 +1026,20 @@ impl Bot {
         best
     }
 
-    /// Siege: an attacker goes for the enemy's core once it is open, else
-    /// for a generator of theirs still standing, two attackers to one (one
-    /// alone dies before it is overloaded); a defender holds a generator of
-    /// its own (by seat; the core once they are down) and goes for whoever
-    /// is overloading it. A few metres apart in a ring, each its own way.
-    fn siege_goal(w: &World, slot: usize) -> Option<(V3, usize)> {
-        let at = w.map.siege.filter(|_| w.rules.siege)?;
-        let me = &w.fighters[slot];
-        let mine = me.team as usize & 1;
-        let off = (slot / 4) as f32 * 1.7;
-        let spread = V3::new(fmath::cos(off) * 1.5, 0.0, fmath::sin(off) * 1.5);
-        let node = |side: usize, k: usize| side * (SIEGE_GENS + 1) + k;
-        let standing = |side: usize| {
-            (0..SIEGE_GENS)
-                .map(move |k| node(side, k))
-                .filter(|&n| !w.nodes[n].broken)
-        };
-        let pick = |side: usize, by: usize| {
-            let n = standing(side).count();
-            (n > 0).then(|| standing(side).nth(by % n)).flatten()
-        };
-        let n = if attacker(slot) {
-            let theirs = mine ^ 1;
-            if w.core_open(theirs) {
-                node(theirs, SIEGE_GENS)
-            } else {
-                pick(theirs, slot / 8 + 1)?
-            }
-        } else {
-            pick(mine, slot / 4).unwrap_or(node(mine, SIEGE_GENS))
-        };
-        Some((at[n] + spread, n))
+    /// Siege: side `side`'s gate for the push on `t` ([`rally_point`]),
+    /// kept in [`Bot::rally`]. The walk is long and reads only the map,
+    /// the side, the target and which of our generators stand, so it is
+    /// walked again only when one of those changes.
+    fn gate(&mut self, w: &World, side: usize, t: usize) -> V3 {
+        let mut key = t as u32 | (side as u32) << 12 | (w.map.id as u32) << 16;
+        for k in 0..SIEGE_GENS {
+            key |= (w.nodes[node_of(side, k)].broken as u32) << (8 + k);
+        }
+        if key != self.rally_for {
+            self.rally_for = key;
+            self.rally = rally_point(w, side, t);
+        }
+        self.rally
     }
 
     /// Where to steer for `goal` from `at` on a map with no waypoints (a
@@ -707,14 +1127,23 @@ impl Bot {
     fn focused(&self) -> bool {
         matches!(
             self.job,
-            Job::Attack | Job::Carry(_) | Job::Board(..) | Job::Drive(..) | Job::Hunt(_)
+            Job::Attack
+                | Job::Carry(_)
+                | Job::Board(..)
+                | Job::Drive(..)
+                | Job::Hunt(_)
+                | Job::Push(_)
+                | Job::Rally(_)
+                | Job::Hold(_)
         )
     }
 
     /// Looks for the nearest enemy it can see (one well camouflaged only
     /// near; on its way somewhere that matters, the far ones let be; the
     /// one it hunts before others), and in Siege with none, the nearest
-    /// enemy minion in sight. The target, and how long it has had it.
+    /// enemy minion in sight; keeping or pushing a ring, an enemy minion in
+    /// it before any fighter but a near one. The target, and how long it
+    /// has had it.
     fn look(&mut self, w: &World, slot: usize, eye: V3) {
         let me = &w.fighters[slot];
         let (sn, cs) = crate::geom::yaw_sincos(me.yaw);
@@ -748,7 +1177,30 @@ impl Bot {
             }
         }
         self.minion = 255;
-        if best == 255 && w.rules.siege {
+        // In its ring: an enemy minion there holds it for them, or
+        // overloads ours, so it goes first.
+        let ring = match self.job {
+            Job::Push(n) | Job::Hold(n) => w.map.siege.map(|a| a[n as usize]),
+            _ => None,
+        };
+        if let Some(c) = ring.filter(|_| best == 255 || near > RING_MINION_FIRST_M) {
+            let mut mn = f32::INFINITY;
+            for (i, m) in w.minions.iter().enumerate() {
+                if !m.alive || m.team == me.team & 1 || (m.body.pos - c).flat().len() >= RING_MINION_M {
+                    continue;
+                }
+                let chest = m.body.pos + V3::new(0.0, 0.9, 0.0);
+                let d = (chest - eye).len();
+                if d < mn && d < MINION_RANGE * 1.5 && w.map.clear(eye, chest) {
+                    mn = d;
+                    self.minion = i as u8;
+                }
+            }
+            if self.minion != 255 {
+                best = 255;
+            }
+        }
+        if best == 255 && self.minion == 255 && w.rules.siege {
             for (i, m) in w.minions.iter().enumerate() {
                 if !m.alive || m.team == me.team & 1 {
                     continue;
@@ -886,20 +1338,26 @@ impl Bot {
                 };
                 point(at, 0.0, true)
             }
+            // Its spot in the ring, by the node's waypoints.
+            Job::Push(n) | Job::Hold(n) => Goal {
+                at: w.map.siege.map_or(me.body.pos, |at| ring_spot(&at, n as usize, slot)),
+                spot: nav.map(|nv| nv.siege(n as usize)),
+                arrive: RING_M,
+                urgent: true,
+            },
+            // Its spot about the rally, each of a side its own way; near a
+            // launcher's pad, back to it while it fights.
+            Job::Rally(_) => {
+                let at = rally_spot(w, self.rally, slot);
+                let far = (at - me.body.pos).flat().len() > RALLY_LEASH_M;
+                point(at, 1.0, far || !off_pads(w, me.body.pos, RALLY_PAD_M))
+            }
             _ => {
-                // Its own way: a gun it wants, Siege's objective, roaming.
+                // Its own way: a gun it wants, else roaming.
                 if look {
                     if let Some(at) = Self::loot(w, slot) {
                         return point(at, 0.0, false);
                     }
-                }
-                if let Some((at, n)) = Self::siege_goal(w, slot) {
-                    return Goal {
-                        at,
-                        spot: nav.map(|nv| nv.siege(n)),
-                        arrive: 1.0,
-                        urgent: attacker(slot),
-                    };
                 }
                 self.roam_goal(w, me.body.pos, 1)
             }
@@ -907,7 +1365,7 @@ impl Bot {
     }
 
     /// Which way a bot holding where it is keeps watch: from home toward
-    /// the enemy's; by the carrier, the way it goes.
+    /// the enemy's (in Siege, their core); by the carrier, the way it goes.
     fn watch(&self, w: &World, slot: usize) -> Option<V3> {
         let me = &w.fighters[slot];
         let side = me.team as usize & 1;
@@ -915,6 +1373,10 @@ impl Bot {
             Job::Guard(_) | Job::Carry(_) | Job::Attack => {
                 let b = w.map.flags?;
                 Some((b[side ^ 1] - me.body.pos).flat())
+            }
+            Job::Push(_) | Job::Rally(_) | Job::Hold(_) => {
+                let at = w.map.siege?;
+                Some((at[node_of(side ^ 1, SIEGE_GENS)] - me.body.pos).flat())
             }
             Job::Escort(c) => {
                 let f = &w.fighters[c as usize];
@@ -1046,12 +1508,35 @@ impl Bot {
             self.parked = 0;
             self.waited = 0;
             self.jams = 0;
+            self.out = 255;
+            self.rallied = 0;
             return inp;
         }
         // Its side's plan, on the side's tick.
         if self.job_tick == NEVER || w.tick.is_multiple_of(PLAN_EVERY) {
-            self.job = plan(w, me.team as usize & 1)[slot];
+            let side = me.team as usize & 1;
+            let new = if siege_on(w) {
+                let rally = self.gate(w, side, push_target(w, side));
+                siege_plan(w, side, rally)[slot]
+            } else {
+                plan(w, side)[slot]
+            };
+            self.job = new;
             self.job_tick = w.tick;
+        }
+        // Siege: set out on a push, it goes on (thrown, on its way to the
+        // pad, or after a truck it didn't get into: the gathered count falls
+        // as each leaves); waited at the gate a wave's time, it goes as it is.
+        if let Job::Rally(t) = self.job {
+            self.rallied = self.rallied.saturating_add(1);
+            if self.out == t || self.rallied as u32 > ticks(RALLY_MAX_MS) {
+                self.job = Job::Push(t);
+            }
+        } else {
+            self.rallied = 0;
+        }
+        if let Job::Push(t) = self.job {
+            self.out = t;
         }
         // A vehicle it can't get to (or into): let be a while.
         if matches!(self.job, Job::Board(..)) && me.riding().is_none() {
@@ -1066,8 +1551,20 @@ impl Bot {
         if self.ride_cool > 0 {
             self.ride_cool -= 1;
             if matches!(self.job, Job::Board(..)) && me.riding().is_none() {
+                let side = me.team as usize & 1;
                 self.job = if w.rules.ctf && w.map.flags.is_some() {
                     Job::Attack
+                } else if siege_on(w) {
+                    // At home and not yet set out on it, to the gate; else
+                    // on with the push.
+                    let t = push_target(w, side);
+                    if home(w, side, me.body.pos) && self.out != t as u8 {
+                        self.gate(w, side, t);
+                        Job::Rally(t as u8)
+                    } else {
+                        self.out = t as u8;
+                        Job::Push(t as u8)
+                    }
                 } else {
                     Job::Free
                 };
@@ -1238,6 +1735,10 @@ impl Bot {
             let l = to.len().max(1e-3);
             let across = V3::new(-to.z, 0.0, to.x) * (self.strafe as f32 * WEAVE / l);
             Self::stick(&mut inp, to * (1.0 / l) + across, 1.0);
+        } else if matches!(self.job, Job::Push(_) | Job::Hold(_) | Job::Rally(_)) {
+            // In its ring, or at the gate: it fights from where it stands.
+            inp.mz = 0;
+            inp.mx = self.strafe * RING_STRAFE;
         } else {
             inp.mz = if a.kind == crate::arms::Kind::Sword || near > 14.0 {
                 127
@@ -1327,8 +1828,9 @@ impl Bot {
     }
 
     /// A rider gets out: its vehicle stopped by the enemy's flag (to go
-    /// for it), or by home with the flag aboard; nobody at the wheel; the
-    /// hull nearly gone; or a job that isn't riding this.
+    /// for it), or by home with the flag aboard; in Siege, stopped by an
+    /// enemy node; nobody at the wheel; the hull nearly gone; or a job that
+    /// isn't riding this.
     fn get_off(&mut self, w: &World, slot: usize, vi: usize) -> bool {
         let me = &w.fighters[slot];
         let v = &w.vehicles[vi];
@@ -1336,6 +1838,10 @@ impl Bot {
         let stopped = v.vel.flat().len() < 1.5;
         if v.driver().is_none() || v.health * BAIL_HEALTH < v.spec().health {
             return true;
+        }
+        // Siege: stopped by an enemy node, out to push it.
+        if siege_on(w) {
+            return stopped && enemy_near(w, side, v.pos, DROP_M);
         }
         let Some(b) = w.map.flags.filter(|_| w.rules.ctf) else {
             return false;
@@ -1405,6 +1911,20 @@ impl Bot {
                 }
             }
             Trip::Hunt(e) => point(w.fighters[e as usize].body.pos, 0.0),
+            // As near the node as a truck goes, parked short of it.
+            Trip::Push(n) => {
+                let spot = nav.map(|nv| nv.siege(n as usize));
+                let end = spot
+                    .and_then(|s| nav.and_then(|nv| nv.wheels.as_ref()).and_then(|g| g.end(s)))
+                    .or_else(|| w.map.siege.map(|at| at[n as usize]))
+                    .unwrap_or(v.pos);
+                Goal {
+                    at: end,
+                    spot,
+                    arrive: SIEGE_PARK_M,
+                    urgent: true,
+                }
+            }
             Trip::Roam => match enemy_in_sight {
                 Some(at) if (at - v.pos).flat().len() < 60.0 => point(at, 0.0),
                 _ => self.roam_goal(w, v.pos, 1),
@@ -1414,8 +1934,8 @@ impl Bot {
 
     /// At the controls of vehicle `vi`: a truck driven, a skimmer or a
     /// flier piloted, where its trip takes it; out when the hull is nearly
-    /// gone, it is stuck for good, or it has waited by the enemy's flag
-    /// long enough.
+    /// gone, it is stuck for good, it has waited by the enemy's flag long
+    /// enough, or it has parked by the node it pushes (or jammed near it).
     #[allow(clippy::too_many_arguments)]
     fn pilot(
         &mut self,
@@ -1438,10 +1958,23 @@ impl Bot {
         // waits to fetch them.)
         self.crewed |= v.seats[PASSENGER] != 0;
         let alone = self.parked as u32 > TICK_HZ && !self.crewed && !wait;
+        // Pushing: parked by the node, or jammed short of it, out to push
+        // it on foot.
+        let pushed = match trip {
+            Trip::Push(n) => {
+                self.parked as u32 > ticks(DRIVER_OUT_MS)
+                    || (self.backing > 0
+                        && w.map
+                            .siege
+                            .is_some_and(|at| (at[n as usize] - v.pos).flat().len() < DROP_M))
+            }
+            _ => false,
+        };
         let leave = v.health * BAIL_HEALTH < v.spec().health
             || self.jams >= JAMS
             || self.parked as u32 > ticks(PARK_MS)
             || alone
+            || pushed
             || (v.kind == FLIER && !flies(w));
         if leave {
             self.jams = 0;
@@ -1565,6 +2098,7 @@ impl Bot {
         } else {
             self.waited = 0;
         }
+        let push = matches!(trip, Trip::Push(_));
         let at_end = left <= goal.arrive.max(1.0);
         if waiting || at_end {
             // Stopped: the brake while it rolls (a throttle against its
@@ -1582,7 +2116,7 @@ impl Bot {
             self.stuck = 0;
             self.was = V3::ZERO;
             self.was_for = 0;
-            if at_end && trip == Trip::Attack && w.rules.ctf {
+            if at_end && ((trip == Trip::Attack && w.rules.ctf) || push) {
                 self.parked = self.parked.saturating_add(1);
             }
             return inp;
@@ -1610,7 +2144,9 @@ impl Bot {
             self.wheel_way = u16::MAX;
             self.was = V3::ZERO;
         }
-        if speed > 6.0 && self.backing == 0 {
+        // Going again, its jams are behind it; on a push, rocking where it
+        // jammed is no going, so they add up till it gets out.
+        if speed > 6.0 && self.backing == 0 && !push {
             self.jams = 0;
         }
         let steer = (diff * 6.0).clamp(-1.0, 1.0) * 127.0;
@@ -1698,7 +2234,7 @@ fn mind_the_edge(w: &World, slot: usize, inp: &mut Input) {
     inp.mx = 0;
 }
 
-/// Capture the Flag: whether the bot in `slot` attacks or defends. Seats
+/// Capture the Flag and Siege: whether the bot in `slot` attacks or defends. Seats
 /// alternate sides (`slot & 1`), so the role alternates within a side.
 fn attacker(slot: usize) -> bool {
     (slot / 2).is_multiple_of(2)

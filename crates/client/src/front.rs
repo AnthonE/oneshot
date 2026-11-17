@@ -111,18 +111,17 @@ struct Mode {
 }
 
 /// What the play panel offers, in its order: Big Team, the pick it opens
-/// on (a match of bots to walk into with nobody online), and free for all.
-/// The rest of [`MODES`] are held off the list while the game is young (a
-/// link, `--mode`, a party's room and a friend's match still find them),
-/// the 1v1s among them: the bot duel and the rated one.
-const LISTED: [u8; 2] = [proto::MODE_BIG_TEAM, proto::MODE_FFA];
+/// on (a match of bots to walk into with nobody online), Siege, and free
+/// for all. The rest of [`MODES`] are held off the list while the game is
+/// young (a link, `--mode`, a party's room and a friend's match still find
+/// them), the 1v1s among them: the bot duel and the rated one.
+const LISTED: [u8; 3] = [proto::MODE_BIG_TEAM, proto::MODE_SIEGE, proto::MODE_FFA];
 /// The mode the title opens on, and the one picked when the server shuts
 /// the one that was (the server plays a shut mode as this: its hub).
 const DEFAULT_MODE: u8 = proto::MODE_BIG_TEAM;
 
-/// Every mode the title can name (a friend's match, a party's, a link's),
-/// Siege not among them until it plays (`--mode siege` still finds it).
-const MODES: [Mode; 9] = [
+/// Every mode the title can name (a friend's match, a party's, a link's).
+const MODES: [Mode; 10] = [
     Mode {
         id: proto::MODE_CASUAL,
         name: "VS THE BOT",
@@ -163,6 +162,14 @@ const MODES: [Mode; 9] = [
             "Take their flag and bring it to yours while yours is home. First to 3 captures. Bots fill the empty seats.",
         ranked: false,
         tag: "mode8",
+    },
+    Mode {
+        id: proto::MODE_SIEGE,
+        name: "SIEGE",
+        short: "8V8 · GENERATORS",
+        about: "Stand in their generators' rings to overload them; with all three down their core's shield falls. Break the core to win. Bots fill the empty seats.",
+        ranked: false,
+        tag: "mode10",
     },
     Mode {
         id: proto::MODE_WATCH,

@@ -6,15 +6,16 @@
 //! clock run out is sudden death with every core open; towers that fire
 //! needles at enemies near, minions first; minion waves that walk to the
 //! enemy's generator, count in its ring and die to a rifle; and bots that
-//! play it on Dry Fork.
+//! play it on every map with its nodes.
 
-use sim::bot::{bot_match_on, Bot};
+use sim::bot::{bot_match_on, push_target, rally_point, rally_spot, Bot, Job};
 use sim::consts::*;
 use sim::events::Cause;
 use sim::events::Kind as Ev;
 use sim::geom::V3;
 use sim::input::*;
 use sim::map::Map;
+use sim::nav::Nav;
 use sim::world::{Phase, Rules, World, NODE_CONTESTED, NODE_FALLING, NODE_RISING, NO_WINNER};
 
 const NO_LAG: [u32; MAX_FIGHTERS] = [0; MAX_FIGHTERS];
@@ -358,33 +359,189 @@ fn waves_come_out_walk_to_the_enemy_generator_count_in_its_ring_and_die_to_a_rif
     assert_eq!(w.fighters[0].kills, 0, "a minion is no kill");
 }
 
+/// How long each of the bots' Siege matches plays at most, and the seeds
+/// tried on each map: enough that one showing it all is no luck (each
+/// does a little under four times in five), so a change that moves the
+/// matches can't fail it by chance; how often they break one is the bots
+/// tool's to say (`examples/bots.rs`).
+const MINUTES: u32 = 12;
+const SEEDS: core::ops::Range<u64> = 7..19;
+
+/// What a bots' Siege match of `seed` on `d` showed by the time it had
+/// shown all of it, or by [`MINUTES`]: the checks it never met.
+fn bots_play_siege(d: &sim::map::Def, seed: u64) -> Vec<&'static str> {
+    let mut w = World::new(d.build(), Rules::siege(), seed, (1, 2));
+    let at = w.map.siege.expect("a Siege map");
+    let mut bots = [Bot::new(seed, 0, 0.5); MAX_FIGHTERS];
+    for (s, b) in bots.iter_mut().enumerate() {
+        w.seat(s, (s & 1) as u8);
+        *b = Bot::new(seed, s, SIEGE_BOT_SKILL);
+    }
+    let (mut needles, mut minions_shot) = (0, 0);
+    let (mut broke, mut grouped, mut answered, mut went, mut held) = (false, false, false, false, false);
+    let mut was = [Job::Free; MAX_FIGHTERS];
+    let mut inputs = [Input::default(); MAX_FIGHTERS];
+    let checks = |broke, grouped, answered, went, held, needles, minions_shot| {
+        [
+            (broke, "no generator broken by a fighter"),
+            (grouped, "never two of a side in an enemy ring"),
+            (answered, "no ring contested"),
+            (went, "no push went from the gate"),
+            (held, "nobody held a ring"),
+            (needles > 0, "no tower fired"),
+            (minions_shot > 0, "nobody shot a minion"),
+        ]
+        .into_iter()
+        .filter(|&(ok, _)| !ok)
+        .map(|(_, what)| what)
+        .collect::<Vec<_>>()
+    };
+    for t in 0..ticks(MINUTES * 60_000) {
+        for s in 0..MAX_FIGHTERS {
+            inputs[s] = bots[s].think(&w, s);
+            let job = bots[s].job();
+            went |= matches!((was[s], job), (Job::Rally(a), Job::Push(b)) if a == b);
+            held |= matches!(job, Job::Hold(_));
+            was[s] = job;
+        }
+        w.step(&inputs, &NO_LAG);
+        for e in w.events.as_slice() {
+            needles += (e.kind == Ev::Tower) as u32;
+            minions_shot += (e.kind == Ev::Minion && e.part <= 1 && e.a != NO_WINNER) as u32;
+            // A generator broken with a fighter in its ring, not by
+            // minions alone.
+            broke |=
+                e.kind == Ev::Node && e.part == 0 && (e.a as usize) < MAX_FIGHTERS && !World::is_core(e.b as usize);
+        }
+        answered |= w.nodes.iter().any(|n| n.held == NODE_CONTESTED);
+        if t % TICK_HZ == 0 {
+            for (n, &p) in at.iter().enumerate() {
+                if w.nodes[n].broken || World::is_core(n) {
+                    continue;
+                }
+                let theirs = World::node_side(n) ^ 1;
+                let in_ring = w
+                    .fighters
+                    .iter()
+                    .filter(|f| {
+                        let d = f.body.pos - p;
+                        f.active()
+                            && f.riding().is_none()
+                            && f.team as usize & 1 == theirs
+                            && d.flat().len() < NODE_REACH
+                            && sim::fmath::fabs(d.y) < NODE_RISE
+                    })
+                    .count();
+                grouped |= in_ring >= 2;
+            }
+            // All shown: no need to play on.
+            if checks(broke, grouped, answered, went, held, needles, minions_shot).is_empty() {
+                break;
+            }
+        }
+    }
+    checks(broke, grouped, answered, went, held, needles, minions_shot)
+}
+
+/// Bots play Siege on every map with its nodes: in one of a few matches
+/// at least they push a generator together and break it, a side's
+/// defenders answer an enemy in its ring, and the plan's jobs show (a push
+/// going from the gate, a keeper in a ring); towers fire and minions are
+/// shot.
 #[test]
-fn bots_and_minions_push_on_dry_fork() {
+fn bots_push_together_break_generators_and_defenders_answer() {
+    let mut failed = Vec::new();
     for d in sim::maps::ALL.iter().filter(|d| d.siege.len() == SIEGE_NODES) {
-        let mut w = World::new(d.build(), Rules::siege(), 7, (1, 2));
-        let mut bots = [Bot::new(7, 0, 0.5); MAX_FIGHTERS];
-        for (s, b) in bots.iter_mut().enumerate() {
-            w.seat(s, (s & 1) as u8);
-            *b = Bot::new(7, s, SIEGE_BOT_SKILL);
-        }
-        let (mut needles, mut minions_shot, mut loaded) = (0, 0, false);
-        let mut inputs = [Input::default(); MAX_FIGHTERS];
-        let minutes = 8;
-        for _ in 0..ticks(minutes * 60_000) {
-            for s in 0..MAX_FIGHTERS {
-                inputs[s] = bots[s].think(&w, s);
+        let mut lacked = Vec::new();
+        for seed in SEEDS {
+            let lack = bots_play_siege(d, seed);
+            if lack.is_empty() {
+                lacked.clear();
+                break;
             }
-            w.step(&inputs, &NO_LAG);
-            for e in w.events.as_slice() {
-                needles += (e.kind == Ev::Tower) as u32;
-                minions_shot += (e.kind == Ev::Minion && e.part <= 1 && e.a != NO_WINNER) as u32;
-            }
-            loaded |= w.nodes.iter().any(|n| n.load > 0 || n.broken);
+            lacked.push((seed, lack));
         }
-        assert!(loaded, "{}: nobody stood in a ring in {minutes} minutes", d.name);
-        assert!(needles > 0, "{}: no tower fired", d.name);
-        assert!(minions_shot > 0, "{}: nobody shot a minion", d.name);
+        if !lacked.is_empty() {
+            failed.push((d.name, lacked));
+        }
         // And the parity gate's run has a Siege match here.
         assert_ne!(bot_match_on(d.id, 4, 1, 600), 0);
+    }
+    assert!(
+        failed.is_empty(),
+        "in {MINUTES} minutes, at seeds {SEEDS:?}: {failed:#?}"
+    );
+}
+
+/// The bots push a generator while one stands, in sudden death too (every
+/// core open, but a break scores and the lead wins when it runs out),
+/// one already loaded first; with every one down, the core.
+#[test]
+fn the_push_is_for_a_standing_generator_then_the_core() {
+    let mut w = quiet_with(Rules::siege());
+    w.overtime = 1;
+    assert!(w.core_open(1));
+    let t = push_target(&w, 0);
+    assert!(World::node_side(t) == 1 && !World::is_core(t), "{t}");
+    // One a third loaded is finished first.
+    let k = (CORE + 1..BLUE_CORE).find(|&n| n != t).unwrap();
+    w.nodes[k].load = World::node_full(k) / 3;
+    assert_eq!(push_target(&w, 0), k);
+    for n in CORE + 1..BLUE_CORE {
+        w.nodes[n].broken = true;
+    }
+    assert_eq!(push_target(&w, 0), BLUE_CORE);
+}
+
+/// A side's push gathers at its gate: on every map with nodes, for each
+/// side and each enemy node, the rally is on the way out of its core to
+/// that node (nearer it by the waypoints), by the launcher that throws the
+/// push out and off its pad, and so is every seat's spot about it.
+#[test]
+fn the_siege_rally_is_on_the_way_out() {
+    for d in sim::maps::ALL.iter().filter(|d| d.siege.len() == SIEGE_NODES) {
+        let w = World::new(d.build(), Rules::siege(), 1, (1, 2));
+        let at = w.map.siege.expect("a Siege map");
+        let nav = Nav::of(&w.map).expect("one of the game's maps");
+        for side in 0..2 {
+            let core = at[side * (SIEGE_GENS + 1) + SIEGE_GENS];
+            for k in 0..=SIEGE_GENS {
+                let t = (side ^ 1) * (SIEGE_GENS + 1) + k;
+                let r = rally_point(&w, side, t);
+                let cost = |p: V3| {
+                    let mut way = u16::MAX;
+                    nav.foot.cost(nav.siege(t), p, &mut way)
+                };
+                assert!(
+                    cost(r) < cost(core),
+                    "{}: side {side}'s rally for node {t} at {r:?} is no nearer it than its core",
+                    d.name
+                );
+                let pad = w
+                    .map
+                    .launchers
+                    .iter()
+                    .map(|l| ((l.area.min + l.area.max) * 0.5 - r).flat().len())
+                    .fold(f32::INFINITY, f32::min);
+                assert!(
+                    pad > 3.0 && pad < 12.0,
+                    "{}: side {side}'s rally for node {t} at {r:?} is {pad} m from a launcher's pad",
+                    d.name
+                );
+                // Nobody's own spot about it is on a pad, or a step off one.
+                for slot in (side..MAX_FIGHTERS).step_by(2) {
+                    let p = rally_spot(&w, r, slot);
+                    let near = w.map.launchers.iter().any(|l| {
+                        let (lo, hi) = (l.area.min, l.area.max);
+                        p.x > lo.x - 2.0 && p.x < hi.x + 2.0 && p.z > lo.z - 2.0 && p.z < hi.z + 2.0
+                    });
+                    assert!(
+                        !near,
+                        "{}: seat {slot}'s spot at the rally {p:?} is by a launcher's pad",
+                        d.name
+                    );
+                }
+            }
+        }
     }
 }
