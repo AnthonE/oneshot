@@ -2098,17 +2098,8 @@ impl Bot {
         } else {
             self.waited = 0;
         }
-        // On a push it brakes in time to stop short of the ring, not in it
-        // (as it stops at its hardest, a little past, so it never lets go
-        // of the brake on the way), and at rest a little short of there it
-        // is parked.
         let push = matches!(trip, Trip::Push(_));
-        let stop = if push {
-            speed * speed / (2.0 * (VEH_BRAKE + VEH_ROLL * VEH_TOP))
-        } else {
-            0.0
-        };
-        let at_end = left <= goal.arrive.max(1.0) + stop || (push && speed < 1.5 && left <= goal.arrive + PARK_M);
+        let at_end = left <= goal.arrive.max(1.0);
         if waiting || at_end {
             // Stopped: the brake while it rolls (a throttle against its
             // going brakes).
