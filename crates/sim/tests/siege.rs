@@ -8,7 +8,7 @@
 //! enemy's generator, count in its ring and die to a rifle; and bots that
 //! play it on every map with its nodes.
 
-use sim::bot::{bot_match_on, rally_point, rally_spot, Bot, Job};
+use sim::bot::{bot_match_on, push_target, rally_point, rally_spot, Bot, Job};
 use sim::consts::*;
 use sim::events::Cause;
 use sim::events::Kind as Ev;
@@ -360,9 +360,12 @@ fn waves_come_out_walk_to_the_enemy_generator_count_in_its_ring_and_die_to_a_rif
 }
 
 /// How long each of the bots' Siege matches plays at most, and the seeds
-/// tried on each map.
+/// tried on each map: enough that one showing it all is no luck (each
+/// does a little under four times in five), so a change that moves the
+/// matches can't fail it by chance; how often they break one is the bots
+/// tool's to say (`examples/bots.rs`).
 const MINUTES: u32 = 12;
-const SEEDS: [u64; 5] = [7, 8, 9, 10, 11];
+const SEEDS: core::ops::Range<u64> = 7..19;
 
 /// What a bots' Siege match of `seed` on `d` showed by the time it had
 /// shown all of it, or by [`MINUTES`]: the checks it never met.
@@ -468,6 +471,26 @@ fn bots_push_together_break_generators_and_defenders_answer() {
         failed.is_empty(),
         "in {MINUTES} minutes, at seeds {SEEDS:?}: {failed:#?}"
     );
+}
+
+/// The bots push a generator while one stands, in sudden death too (every
+/// core open, but a break scores and the lead wins when it runs out),
+/// one already loaded first; with every one down, the core.
+#[test]
+fn the_push_is_for_a_standing_generator_then_the_core() {
+    let mut w = quiet_with(Rules::siege());
+    w.overtime = 1;
+    assert!(w.core_open(1));
+    let t = push_target(&w, 0);
+    assert!(World::node_side(t) == 1 && !World::is_core(t), "{t}");
+    // One a third loaded is finished first.
+    let k = (CORE + 1..BLUE_CORE).find(|&n| n != t).unwrap();
+    w.nodes[k].load = World::node_full(k) / 3;
+    assert_eq!(push_target(&w, 0), k);
+    for n in CORE + 1..BLUE_CORE {
+        w.nodes[n].broken = true;
+    }
+    assert_eq!(push_target(&w, 0), BLUE_CORE);
 }
 
 /// A side's push gathers at its gate: on every map with nodes, for each

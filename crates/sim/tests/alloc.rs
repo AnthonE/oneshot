@@ -5,7 +5,7 @@ use std::alloc::{GlobalAlloc, Layout, System};
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use sim::bot::Bot;
-use sim::consts::{MAX_FIGHTERS, SIEGE_BOT_SKILL};
+use sim::consts::{MAX_FIGHTERS, NODE_PUSHERS, SIEGE_BOT_SKILL};
 use sim::input::Input;
 use sim::world::{Rules, World};
 use sim::Map;
@@ -83,28 +83,29 @@ fn on_terrain_with_vehicles() {
         time_limit_ms: 0,
         ..Rules::big_team()
     };
-    sixteen(sim::maps::canyon::DEF.build(), rules, 0.6, 5, 20_000);
+    sixteen(sim::maps::canyon::DEF.build(), rules, 0.6, 5, 20_000, |_| {});
 }
 
 /// Siege on Dry Fork as served: the side plans, the gate, trucks to the
-/// rings, towers, minion waves, generators broken.
+/// rings, towers, minion waves; red's first generator overloaded past
+/// full as the count starts, so it breaks on the first counted tick
+/// whoever stands in its ring, and the rest is played with it down.
 fn on_siege() {
     let w = sixteen(
         sim::maps::canyon::DEF.build(),
         Rules::siege(),
         SIEGE_BOT_SKILL,
-        1,
-        60_000,
+        5,
+        20_000,
+        |w| w.nodes[0].load = World::node_full(0) + NODE_PUSHERS,
     );
-    assert!(
-        w.nodes.iter().any(|n| n.broken),
-        "no generator broke in the counted ticks"
-    );
+    assert!(w.nodes[0].broken, "the generator didn't break");
 }
 
-/// Sixteen bots of `skill` on `map` under `rules` from `seed`, `n` ticks
-/// counted; the world they leave.
-fn sixteen(map: Map, rules: Rules, skill: f32, seed: u64, n: u32) -> World {
+/// Sixteen bots of `skill` on `map` under `rules` from `seed`, `ready`
+/// done to the world after the warm-up, `n` ticks counted; the world they
+/// leave.
+fn sixteen(map: Map, rules: Rules, skill: f32, seed: u64, n: u32, ready: fn(&mut World)) -> World {
     let mut w = World::new(map, rules, seed, (1, 2));
     let mut bots = [Bot::new(seed, 0, 0.5); MAX_FIGHTERS];
     for (s, b) in bots.iter_mut().enumerate() {
@@ -122,6 +123,7 @@ fn sixteen(map: Map, rules: Rules, skill: f32, seed: u64, n: u32) -> World {
         }
     };
     run(&mut w, 500);
+    ready(&mut w);
     let before = ALLOCS.load(Ordering::Relaxed);
     run(&mut w, n);
     assert_eq!(ALLOCS.load(Ordering::Relaxed) - before, 0);
