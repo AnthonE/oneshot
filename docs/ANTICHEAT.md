@@ -90,7 +90,7 @@ training data. Three pieces:
   16-bit seed per accepted mutation, Such et al. 2017), copied over under
   `RIP.md`'s rule. Every cheat in the zoo is a 280-character line that
   rebuilds exactly.
-- **The arms race** (`oneshot-zoo`, after Gates' `examples/zoo.rs` and
+- **The arms race** (`tools/aim/zoo.py`, after Gates' `examples/zoo.rs` and
   `examples/school.rs`). Fitness is advantage gained minus how hard the
   detector flags it. The archive is a quality-diversity grid (MAP-Elites, as
   Rainbow Teaming does for jailbreaks), one elite per style: blatant, closet,
@@ -127,15 +127,31 @@ on Qwen (EXP-JUDAS, EXP-ZOO) work better here, because we hold ground truth:
 
 ## 7 · The stages, by population, not by date
 
-**Stage 0 — now, no players needed.**
+**Stage 0 — no players needed. Built** (`tools/aim`, `oneshot-aim`).
 - A profile row per player per match, beside the replay: `watch.json`
   extended with aim (reaction to plain sight, snap share, head rate,
   pre-aim, tracking smoothness) and the rest of the game (movement,
   positioning, utility, deaths taken to first shots).
 - A profile store keyed on the wallet: on the server, those numbers only.
-- Aim windows exported from replays; the overlay; `genome.rs` copied over.
-- A first offline detector on bots with overlays, labelled as plumbing, not
-  as a result.
+- Aim windows exported from replays or bot matches, each with its cheated
+  twin (`room::window`, `room::assist`); `genome.rs` copied over
+  (`room::genome`). Assists are knobs (some picking their moments: past a
+  range, shields down) or a bred net (`on1:`, Gates' Net).
+- A person's hand on the bots' aim (`--hands`, `hand.rs`), so the zoo also
+  races against a human's click delay and wobble.
+- A first offline detector on the GPU (`train.py`) with its controls,
+  reported per gun, map, style and assist; labelled as plumbing, not as a
+  result.
+- The arms race already runs (`zoo.py`, §5): knob assists and nets bred in
+  one MAP-Elites grid, with a hall of fame.
+- A league (`oneshot-aim league`): a fixed population, some cheating every
+  match, and `players.py` adding a player's flags up over a career as a
+  mixture sequential test, odds that hold under a look after every match
+  (`--selftest`, `--null`). A binomial tail read after every match opened
+  a case on up to 1% of honest careers.
+- Decoys (`room::decoy`): a body sent where its viewer can't see, a held
+  spot as its control; a client that reacts to one has read past the fog.
+  Played offline (`league --decoys`, `players.py --decoys`), not served.
 
 **Stage 1 — alpha, the first real players.**
 - The payout gate: a minimum of ranked matches and no open review.
@@ -151,7 +167,7 @@ on Qwen (EXP-JUDAS, EXP-ZOO) work better here, because we hold ground truth:
 - A self-supervised player embedding: the same player's matches land close.
   That one model is the profile, the change-point watch and the matcher for
   a banned player on a new wallet (BEACON's direction).
-- `oneshot-zoo` against all three views, plotting §5's two numbers.
+- `zoo.py` against all three views, plotting §5's two numbers.
 
 **Stage 3 — thousands of players.**
 - Overlays on real human replays at scale; the transformer detector.
