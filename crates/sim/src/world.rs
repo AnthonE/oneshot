@@ -620,10 +620,11 @@ impl World {
     /// (`vehicle::stick`: a truck's `mx`, `mz`; a one-seater's aim and
     /// boost and roll too): what its passenger, or someone by it, predicts
     /// it on, as kept on (the only part of an input
-    /// [`Vehicle::step_local`] reads). None if nobody drives it (it is
-    /// parked: [`Vehicle::step_parked`]), as [`Self::step`] will next tick.
+    /// [`Vehicle::step_local`] reads). None if nobody drives it, or its
+    /// engine is stalled (either way it steps parked:
+    /// [`Vehicle::step_parked`]), as [`Self::step`] will next tick.
     pub fn drive_stick(&self, i: usize) -> Option<Input> {
-        let v = self.vehicles.get(i).filter(|v| v.active)?;
+        let v = self.vehicles.get(i).filter(|v| v.active && v.stall == 0)?;
         let d = v.driver().filter(|&d| self.fighters[d].active())?;
         Some(crate::vehicle::stick(v.kind, &self.ran[d]))
     }
@@ -928,10 +929,14 @@ impl World {
                     _ if charged => (ProjKind::Charge, a.charge_speed),
                     _ => (ProjKind::Bolt, a.speed),
                 };
-                // A homing round locks on whoever the aim was on, as seen.
+                // A homing round locks on whoever the aim was on, as seen; a
+                // rocket only on a hull, a charged bolt on one if no body.
                 let mut target = NO_TARGET;
                 if matches!(kind, ProjKind::Needle | ProjKind::Charge) {
                     target = self.lock(s, eye, base, a, depth);
+                }
+                if matches!(kind, ProjKind::Rocket | ProjKind::Charge) && target == NO_TARGET {
+                    target = self.lock_hull(s, eye, base, a.aim_range, depth);
                 }
                 // A round that flies straight lives as long as its range
                 // takes; one that blows up, till it lands.
@@ -1165,6 +1170,51 @@ impl World {
             Some((Target::Fighter(q, _), _)) => q as u8,
             _ => NO_TARGET,
         }
+    }
+
+    /// Which hull a rocket or a charged bolt from `eye` along `dir` locks
+    /// on, as `s` saw it: of those an enemy of `s` rides, within `reach`,
+    /// whose middle the aim passes within [`VEH_LOCK_CONE`] of (widened by
+    /// its half length at its distance), the nearest in angle, in clear
+    /// line. `MAX_FIGHTERS` + its slot, as a sticky on it names it, or
+    /// [`NO_TARGET`].
+    fn lock_hull(&self, s: usize, eye: V3, dir: V3, reach: f32, depth: u32) -> u8 {
+        let ride = self.fighters[s].riding().map(|(i, _)| i);
+        let mut best: Option<(f32, usize)> = None;
+        for (i, v) in self.vehicles.iter().enumerate() {
+            if !v.active || ride == Some(i) {
+                continue;
+            }
+            let foe = v.seats.iter().any(|&x| {
+                x != 0 && x as usize - 1 != s && self.fighters[x as usize - 1].active() && !self.mate(s, x as usize - 1)
+            });
+            if !foe {
+                continue;
+            }
+            let p = self.vrewind.pose_at(
+                self.tick,
+                i,
+                self.lag.seen[s].depth(depth, MAX_FIGHTERS + i),
+                &VPose::of(v),
+            );
+            if !p.alive {
+                continue;
+            }
+            let c = p.pos + V3::new(0.0, v.spec().h * 0.5, 0.0);
+            let to = c - eye;
+            let t = to.dot(dir);
+            if t <= 0.0 || t > reach {
+                continue;
+            }
+            let off = (to - dir * t).len() / t;
+            if off > VEH_LOCK_CONE + v.spec().half_l / t || best.is_some_and(|b| b.0 <= off) {
+                continue;
+            }
+            if self.map.clear(eye, c) {
+                best = Some((off, i));
+            }
+        }
+        best.map_or(NO_TARGET, |(_, i)| (MAX_FIGHTERS + i) as u8)
     }
 
     /// Bullet magnetism: of the enemies a ray from `eye` along `dir`
@@ -1665,15 +1715,33 @@ impl World {
     /// is still flying.
     fn fly(&mut self, p: &mut Projectile) -> bool {
         let a = arm(p.arm);
-        if a.homing > 0.0 && (p.target as usize) < MAX_FIGHTERS {
-            let v = self.fighters[p.target as usize];
+        let t = p.target as usize;
+        // Where it homes, and how fast it turns: a body's chest, or a
+        // hull's middle (a rocket's own rate; a charged bolt's its gun's).
+        let homing = if a.homing > 0.0 && t < MAX_FIGHTERS {
+            let v = self.fighters[t];
+            let chest = crate::movement::ducked(v.body.duck, CHEST_Y, CHEST_Y_CROUCH);
+            v.active().then(|| (v.body.pos + V3::new(0.0, chest, 0.0), a.homing))
+        } else if (MAX_FIGHTERS..MAX_FIGHTERS + MAX_VEHICLES).contains(&t)
+            && matches!(p.kind, ProjKind::Rocket | ProjKind::Charge)
+        {
+            let v = self.vehicles[t - MAX_FIGHTERS];
+            let rate = if p.kind == ProjKind::Rocket {
+                ROCKET_VEH_HOMING
+            } else {
+                a.homing
+            };
+            v.active.then(|| (v.pos + V3::new(0.0, v.spec().h * 0.5, 0.0), rate))
+        } else {
+            None
+        };
+        if let Some((at, rate)) = homing {
             let speed = p.vel.len();
-            if v.active() && speed > 0.0 {
-                let chest = crate::movement::ducked(v.body.duck, CHEST_Y, CHEST_Y_CROUCH);
-                let to = (v.body.pos + V3::new(0.0, chest, 0.0) - p.pos).norm();
+            if speed > 0.0 {
+                let to = (at - p.pos).norm();
                 let d = p.vel * (1.0 / speed);
                 let chord = (to - d).len();
-                let turn = a.homing * DT;
+                let turn = rate * DT;
                 let nd = if chord <= turn {
                     to
                 } else {
@@ -1738,6 +1806,11 @@ impl World {
             }
             (ProjKind::Charge, Some(Target::Vehicle(i))) => {
                 self.damage_vehicle(owner, i, CHARGE_VEH_DMG * PT);
+                let v = &mut self.vehicles[i];
+                if v.active {
+                    v.stall = ticks(VEH_STALL_MS) as u16;
+                    v.boosting = false;
+                }
             }
             (ProjKind::Bolt | ProjKind::Needle | ProjKind::Charge, Some(Target::Minion(i))) => {
                 self.hurt_minion(owner as u8, i, a.dmg.max(CHARGE_VEH_DMG) * PT);

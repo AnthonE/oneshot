@@ -294,6 +294,8 @@ pub struct Vehicle {
     pub trick: i16,
     pub trick_cool: u16,
     pub jump: bool,
+    /// Ticks its engine is dead for, a charged bolt's (`VEH_STALL_MS`).
+    pub stall: u16,
 }
 
 impl Thing for Vehicle {
@@ -328,6 +330,11 @@ impl Thing for Vehicle {
             h.u16(self.trick as u16);
             h.u16(self.trick_cool);
             h.bool(self.jump);
+        }
+        // Only while stalled, so a match nobody stalls in hashes as it did.
+        if self.stall != 0 {
+            h.u8(0xF3);
+            h.u16(self.stall);
         }
     }
 }
@@ -520,6 +527,7 @@ impl Vehicle {
         if !self.active {
             return;
         }
+        self.stall = self.stall.saturating_sub(1);
         if self.kind != TRUCK {
             // Nobody at its controls: its tank refills, and its trick runs
             // out.
@@ -560,7 +568,7 @@ impl Vehicle {
                 );
                 self.travel(v, f, map);
             }
-            _ => self.step_local(&Input::default(), map),
+            _ => self.drive(&Input::default(), map),
         }
     }
 
@@ -595,11 +603,21 @@ impl Vehicle {
     /// One tick of driving under the driver's `inp`: throttle and brake
     /// along the heading, sideways grip,
     /// steering that bites with speed, the ground's slope, gravity off it,
-    /// and the boxes in the way. Deterministic in (self, inp, map) alone.
+    /// and the boxes in the way. Stalled, as if nobody drove it
+    /// ([`Self::step_parked`]). Deterministic in (self, inp, map) alone.
     pub fn step_local(&mut self, inp: &Input, map: &Map) {
         if !self.active {
             return;
         }
+        if self.stall > 0 {
+            self.step_parked(map);
+            return;
+        }
+        self.drive(inp, map);
+    }
+
+    /// [`Self::step_local`] with its engine running.
+    fn drive(&mut self, inp: &Input, map: &Map) {
         // Its circles stand along the heading it had before this tick's
         // turn.
         let f = self.axes().0;

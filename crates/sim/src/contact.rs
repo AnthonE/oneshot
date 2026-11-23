@@ -122,7 +122,8 @@ impl Scene {
     }
 
     /// What the stages move, back: every body, and each live hull's place,
-    /// speed, heading and footing, and a one-seater's nose, tank and roll.
+    /// speed, heading and footing, a stall wearing off, and a one-seater's
+    /// nose, tank and roll.
     pub fn put(&self, f: &mut [Fighter; MAX_FIGHTERS], v: &mut [Vehicle; MAX_VEHICLES]) {
         for (f, m) in f.iter_mut().zip(&self.men) {
             f.body = m.body;
@@ -140,6 +141,7 @@ impl Scene {
                 v.trick = h.trick;
                 v.trick_cool = h.trick_cool;
                 v.jump = h.jump;
+                v.stall = h.stall;
             }
         }
     }

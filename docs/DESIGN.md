@@ -606,7 +606,11 @@ keeps every gate in §17 green and moves a golden only on purpose.
     slides, strafes and boosts with its guns cold) and the flier (its nose
     following the aim in yaw and pitch, hanging where it is let go, a bomb
     under its nose). Their hitboxes turn about y only, as the truck's; both
-    on Icefall.
+    on Icefall. Halo 2's two answers to a vehicle: a rocket fired with the
+    aim on a hull an enemy rides locks on it and turns after it (a boost
+    across it or a flier's roll slips it), never on a body; and the ion
+    pistol's charge, which homes on a hull too, kills its engine for 2.5 s
+    (it steps as if parked; a flier falls), its guns still live.
 11. **The delta wire:** snapshots as deltas against the acked baseline, a
     byte budget, events cleared on ack. Events first (done): each event a
     client may be told gets an id and rides every snapshot until one that

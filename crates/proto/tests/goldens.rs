@@ -320,6 +320,7 @@ fn snapshot() -> Snapshot {
         pitch: -9_000,
         trick: -80,
         boosting: true,
+        stalled: true,
     };
     // A rocket launcher on the floor, and someone's grenades.
     s.n_drops = 2;
@@ -769,13 +770,13 @@ fn the_bytes_match_their_goldens() {
     got.push(fnv(&buf[..n]));
     let want: &[u64] = &[
         0x58ae_4fe0_5062_683d,
-        0xde93_6c5e_2cfd_4552,
-        0xc467_aea5_eb4e_211b,
-        0xdf84_084e_5c3a_cdbd,
+        0x70c7_a00b_9aa0_1792,
+        0xff20_a6c4_ad51_4984,
+        0x85f1_8fb3_5bcc_b1a4,
         0x7ebe_34b8_2c10_f2d0,
         0xec88_5efc_d9ac_e183,
         0x0f4a_a0e7_f967_a718,
-        0x1e8c_b203_73aa_0ed2,
+        0x5c05_2cb5_f506_628b,
         0x0835_ec07_b4ee_4fb0,
         0x27e4_471c_ac0a_7864,
         0x0294_d707_7d31_6639,
@@ -800,7 +801,7 @@ fn the_bytes_match_their_goldens() {
         0x451f_c0f0_80a6_2b96,
         0xaf63_d44c_8601_def4,
         0x8ec0_53de_d767_8611,
-        0x84df_dffe_8042_6f39,
+        0x0d85_126a_d44c_57b3,
     ];
     assert_eq!(got, want, "PROTO_VER {PROTO_VER}: got {got:#018x?}");
 }

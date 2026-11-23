@@ -400,6 +400,9 @@ impl Gate {
                             "tick {}: hull {i}'s look",
                             w.tick
                         );
+                        // 21b. A dead engine (a charged bolt's) is the
+                        // hull's own, seen by whoever sees it.
+                        assert_eq!(v.stalled, t.stall > 0, "tick {}: hull {i}'s stall", w.tick);
                         let ridden = t.seats.iter().any(|&x| x != 0 && known(x as usize - 1));
                         let seen = self.history.iter().zip(&self.vhistory).any(|(h, hv)| {
                             hv[i].active

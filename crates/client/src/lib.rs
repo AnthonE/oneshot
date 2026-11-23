@@ -1668,7 +1668,7 @@ const WHEELS_DOWN_M: f32 = 0.3;
 
 /// A one-seater's look as `draw_vehicles` stands it: its kind, a flier's
 /// nose and roll (radians), whether it boosts.
-type CraftLook = (u8, f32, f32, bool);
+type CraftLook = (u8, f32, f32, bool, bool);
 
 /// The vehicles: ours as predicted, the rest interpolated; each a truck
 /// (`look/truck.rs`) or a one-seater (`look/craft.rs`). The pose mode's
@@ -1702,7 +1702,7 @@ fn draw_vehicles(
             v.slot,
             Vec3::new(v.pos.x, v.pos.y, v.pos.z),
             v.yaw,
-            (v.kind, v.pitch, v.roll, v.boosting),
+            (v.kind, v.pitch, v.roll, v.boosting, v.stalled),
         )
     }));
     if let (Some((veh, p, yaw)), Some((i, _))) = (core.own_vehicle(), core.own().0.riding()) {
@@ -1711,7 +1711,7 @@ fn draw_vehicles(
             i as u8,
             Vec3::new(p.x, p.y, p.z),
             yaw,
-            (veh.kind, pitch, roll, veh.boosting),
+            (veh.kind, pitch, roll, veh.boosting, veh.stall > 0),
         ));
     }
     if let Some((p, yaw)) = posed.as_ref().and_then(|p| p.2.truck_at(time.elapsed_secs())) {
@@ -1719,7 +1719,7 @@ fn draw_vehicles(
             0,
             p + Vec3::Y * core.map.ground(p.x, p.z),
             yaw,
-            (sim::vehicle::TRUCK, 0.0, 0.0, false),
+            (sim::vehicle::TRUCK, 0.0, 0.0, false, false),
         ));
     }
     // The pose mode's one-seater, in the next slot.
@@ -1728,10 +1728,10 @@ fn draw_vehicles(
             1,
             p + Vec3::Y * core.map.ground(p.x, p.z),
             yaw,
-            (kind, pitch, roll, boost),
+            (kind, pitch, roll, boost, false),
         ));
     }
-    for &(slot, p, yaw, (kind, pitch, roll, boosting)) in list.iter() {
+    for &(slot, p, yaw, (kind, pitch, roll, boosting, stalled)) in list.iter() {
         // What its bed carries, on this map (or the pose's).
         let turret = match posed.as_ref().map(|p| p.2.truck_turret) {
             _ if kind != sim::vehicle::TRUCK => sim::vehicle::NO_TURRET,
@@ -1767,7 +1767,7 @@ fn draw_vehicles(
                         tr.set_if_neq(t);
                     }
                     if let Ok(mut c) = crafts.get_mut(e) {
-                        (c.yaw, c.pitch, c.roll, c.boosting) = (yaw, pitch, roll, boosting);
+                        (c.yaw, c.pitch, c.roll, c.boosting, c.stalled) = (yaw, pitch, roll, boosting, stalled);
                     }
                 }
                 None => {

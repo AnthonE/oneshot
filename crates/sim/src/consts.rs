@@ -242,6 +242,19 @@ pub const SUPER_EDGE: i32 = 30;
 pub const SUPER_PUSH: f32 = 3.0;
 /// What a charged bolt does to a hull.
 pub const CHARGE_VEH_DMG: i32 = 60;
+/// A charged bolt on a hull kills its engine this long (Halo 2's
+/// overcharge): no throttle, steering or boost, as if nobody drove it; a
+/// flier falls as an unpiloted one does. Its guns still fire.
+pub const VEH_STALL_MS: u32 = 2500;
+/// A rocket fired with the aim on a hull an enemy rides locks on it (Halo
+/// 2's launcher locks on vehicles alone; a charged bolt with no body in its
+/// cone locks on one too): the aim passing within this of its middle, as a
+/// tangent, widened by its half length at its distance, inside the gun's
+/// `aim_range`, in clear line. The nearest in angle.
+pub const VEH_LOCK_CONE: f32 = 0.06;
+/// How fast a rocket locked on a hull turns toward it, radians a second:
+/// a strafe is caught, a boost across its path or a flier's roll slips it.
+pub const ROCKET_VEH_HOMING: f32 = 1.0;
 
 /// A frag, as Halo 2's multiplayer throws it (Halopedia's H2 weapon data,
 /// at 3.048 m a world unit): 160 out to 0.5 wu, down to 50 at 1.75 wu, less

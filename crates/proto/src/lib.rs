@@ -25,7 +25,7 @@ use sim::movement::Body;
 use sim::vehicle::Vehicle;
 use sim::world::Rules;
 
-pub const PROTO_VER: u16 = 37;
+pub const PROTO_VER: u16 = 38;
 /// What every lobby ticket starts with (the server makes them, `auth.rs`;
 /// the client reads one's own fields back to know whose it is).
 pub const TICKET_PREFIX: &str = "os1.";
@@ -703,6 +703,10 @@ pub struct VehState {
     pub pitch: i16,
     pub trick: i16,
     pub boosting: bool,
+    /// Its engine dead (`Vehicle::stall`, a charged bolt's): it fizzes for
+    /// anyone who sees it. A hull in the bubble steps as parked meanwhile
+    /// (its stick None: `World::drive_stick`).
+    pub stalled: bool,
 }
 
 impl Pack for VehState {
@@ -731,6 +735,7 @@ impl Pack for VehState {
                 w.write(self.trick as i8 as u8 as u32, 8)?;
             }
         }
+        w.write_bit(self.stalled)?;
         if let Some(n) = self.near {
             w.write_bit(n.grounded)?;
             w_drive(w, n.stick)?;
@@ -778,6 +783,7 @@ impl Pack for VehState {
                 v.trick = r.read(8)? as u8 as i8 as i16;
             }
         }
+        v.stalled = r.read_bit()?;
         if near {
             let mut n = NearHull {
                 grounded: r.read_bit()?,
@@ -815,6 +821,7 @@ fn w_vehicle(w: &mut BitWriter, v: &Vehicle) -> R<()> {
     w.write(v.home as u32, 8 - TURRET_BITS)?;
     w.write(v.turret as u32, TURRET_BITS)?;
     w.write(v.kind as u32, KIND_BITS)?;
+    w_some_ticks(w, v.stall)?;
     if v.kind != sim::vehicle::TRUCK {
         w.write(v.pitch as u16 as u32, 16)?;
         w.write(v.boost as u32, BOOST_BITS)?;
@@ -960,6 +967,7 @@ fn r_vehicle(r: &mut BitReader) -> R<Vehicle> {
     if v.kind >= sim::vehicle::KINDS {
         return Err(WireError::Malformed);
     }
+    v.stall = r_some_ticks(r)?;
     if v.kind != sim::vehicle::TRUCK {
         v.pitch = r_pitch(r)?;
         v.boost = r.read(BOOST_BITS)? as u16;

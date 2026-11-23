@@ -323,6 +323,8 @@ pub struct Craft {
     pub pitch: f32,
     pub roll: f32,
     pub boosting: bool,
+    /// Its engine dead (a charged bolt's): dark, no flame.
+    pub stalled: bool,
     pub yaw: f32,
     body: Entity,
     exhaust: Entity,
@@ -481,6 +483,7 @@ pub fn spawn(commands: &mut Commands, meshes: &mut Assets<Mesh>, kit: &Kit, mode
         pitch: 0.0,
         roll: 0.0,
         boosting: false,
+        stalled: false,
         yaw: 0.0,
         body,
         exhaust,
@@ -620,7 +623,9 @@ fn pose(
         // (It breathes at rest alone: at speed it burns steady, so a vein
         // stays asleep until the boost.)
         let breath = 1.0 + BREATH.0 * (1.0 - cruise) * (c.t * BREATH.1 * TAU).sin();
-        let want = if c.boosting {
+        let want = if c.stalled {
+            0.0
+        } else if c.boosting {
             BURN.2
         } else {
             (BURN.0 + (BURN.1 - BURN.0) * cruise) * breath
@@ -645,7 +650,13 @@ fn pose(
         }
         // Their flames: none at rest, short at speed, long boosting, each a
         // little out of step with the other.
-        let reach = if c.boosting { 1.0 } else { FLAME_CRUISE * cruise };
+        let reach = if c.stalled {
+            0.0
+        } else if c.boosting {
+            1.0
+        } else {
+            FLAME_CRUISE * cruise
+        };
         let girth = if c.boosting || c.kind == FLIER {
             1.0
         } else {
