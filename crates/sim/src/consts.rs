@@ -725,3 +725,14 @@ pub const SIEGE_RESPAWN_MAX_MS: u32 = 9_000;
 pub const BOT_PICK_MS: u32 = 1200;
 pub const BOT_BIRD_M: f32 = 14.0;
 pub const BOT_GRAPPLE_M: f32 = 14.0;
+/// Skiing (docs/DESIGN.md §16, milestone 9's experiment): on a terrain map,
+/// a body crouched on the ground at this speed or more slides: this much of
+/// its speed lost a second instead of a run's friction, and the slope's
+/// pull along the ground (its normal's flat part, of gravity), going down
+/// a slope steeper than this (its normal's y; about 6°). `SKI` off takes it
+/// out whole. Within this of the terrain is on it (not a box).
+pub const SKI: bool = true;
+pub const SKI_NY: f32 = 0.994;
+pub const SKI_MIN: f32 = 5.0;
+pub const SKI_FRICTION: f32 = 0.35;
+pub const SKI_ON_GROUND: f32 = 0.05;

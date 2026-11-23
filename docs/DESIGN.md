@@ -587,8 +587,11 @@ keeps every gate in §17 green and moves a golden only on purpose.
    4,000 m² or more is a Big Team map; the rest are arenas).
    **Launchers** too: a pad in the map that throws a fighter along a set
    velocity. It reads only the fighter and the map, so it predicts exactly
-   and costs no wire. Skiing (low-friction slides down slopes) is a later
-   experiment.
+   and costs no wire. **Skiing**, an experiment: crouched at 5 m/s or more
+   going down a terrain slope (past about 6°), on its ground, a body loses
+   only a third of its speed a second and the slope pulls it on; on the
+   flat or going up a crouch is a crouch. It is the walk's own step, so it
+   predicts exactly; `SKI` in `consts.rs` takes it out whole.
 10. **Vehicles:** one ground vehicle, a driver and a passenger who shoots,
     rewound for hitscan, splatter. Done (`sim/src/vehicle.rs`): it turns
     about y only and meets boxes as three hull circles; USE gets in and out
