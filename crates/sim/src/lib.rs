@@ -7,6 +7,7 @@
 
 pub mod arms;
 pub mod bot;
+pub mod card;
 pub mod consts;
 pub mod contact;
 pub mod events;

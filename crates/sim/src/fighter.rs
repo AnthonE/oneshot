@@ -8,7 +8,7 @@ use crate::consts::*;
 use crate::geom::V3;
 use crate::input::*;
 use crate::map::Map;
-use crate::movement::Body;
+use crate::movement::{quant, Body};
 use crate::thing::Thing;
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -162,6 +162,19 @@ pub struct Fighter {
     pub hurt_t: u16,
     /// The turret it guns, or last gunned.
     pub mount: Mount,
+    /// Siege's cards (`card.rs`): what each hand holds (`card::NONE`), and
+    /// ticks till each may be played again. Kept through a death. Sent to
+    /// nobody but this fighter.
+    pub cards: [u8; 2],
+    pub card_cool: [u16; 2],
+    /// An offer open to this fighter (the world's to deal): the two cards
+    /// it may take one of (PICK_A, PICK_B), and ticks left to take one.
+    pub offer: [u8; 2],
+    pub offer_left: u16,
+    /// The grapple's hook: where it bit, and ticks left of its pull (0:
+    /// none).
+    pub hook: V3,
+    pub hooked: u16,
 }
 
 /// What a fighter's own tick did, for the world (or the prediction's
@@ -187,6 +200,12 @@ pub struct Local {
     pub mounted: bool,
     /// A flier's pilot let a bomb go (FIRE_LEFT).
     pub bombed: bool,
+    /// The hands (a bit each) whose card was played this tick: the world
+    /// plays the rewind and the frost bird (the grapple is this tick's).
+    pub card: u8,
+    /// PICK_A and PICK_B went down this tick (a bit each): the world takes
+    /// the offer's card, if one is open.
+    pub pick: u8,
 }
 
 impl Fighter {
@@ -209,6 +228,69 @@ impl Fighter {
 
     pub fn eye(&self) -> V3 {
         self.body.eye()
+    }
+
+    /// Plays the card in hand `k`, if it holds one ready: the grapple's
+    /// hook goes out along the aim and bites the map, or misses; any other
+    /// is the world's to play (`Local::card`). Never with the flag.
+    fn play_card(&mut self, k: usize, map: &Map, out: &mut Local) {
+        let c = self.cards[k];
+        if c == crate::card::NONE || self.card_cool[k] > 0 || self.flag {
+            return;
+        }
+        if c != crate::card::GRAPPLE {
+            out.card |= 1 << k;
+            self.card_cool[k] = ticks(crate::card::cool_ms(c)) as u16;
+            return;
+        }
+        let eye = self.eye();
+        let dir = crate::geom::aim_dir(self.yaw, self.pitch);
+        let t = map.ray(eye, dir, GRAPPLE_RANGE);
+        if t >= GRAPPLE_RANGE {
+            self.card_cool[k] = ticks(GRAPPLE_MISS_COOL_MS) as u16;
+            return;
+        }
+        let at = eye + dir * t;
+        // On the wire's grid, so the client's pull is the server's.
+        self.hook = V3::new(quant(at.x), quant(at.y), quant(at.z));
+        self.hooked = ticks(GRAPPLE_MS) as u16;
+        self.card_cool[k] = ticks(GRAPPLE_COOL_MS) as u16;
+        out.card |= 1 << k;
+    }
+
+    /// A tick of the grapple's pull: the body's middle drawn at the hook at
+    /// `GRAPPLE_SPEED` (the stick steering a little, as in the air), out of
+    /// the solids as a walk is. Let go there (its speed eased to
+    /// `GRAPPLE_EXIT`), on JUMP (all of it kept), or at the pull's end.
+    fn pull(&mut self, inp: &Input, pressed: u16, map: &Map) {
+        let to = self.hook - (self.body.pos + V3::new(0.0, GRAPPLE_MID, 0.0));
+        let d = to.len();
+        self.hooked -= 1;
+        if pressed & JUMP != 0 || d < GRAPPLE_DONE || self.hooked == 0 {
+            if pressed & JUMP == 0 {
+                let sp = self.body.vel.len();
+                if sp > GRAPPLE_EXIT {
+                    self.body.vel = self.body.vel * (GRAPPLE_EXIT / sp);
+                }
+            }
+            self.hooked = 0;
+            crate::contact::walk(&mut self.body, self.flag, inp, map);
+            return;
+        }
+        // Gravity is the walk's, so it is paid back here.
+        self.body.vel = to * (GRAPPLE_SPEED / d) + V3::new(0.0, GRAVITY * DT, 0.0);
+        self.body.grounded = false;
+        let held = Input {
+            buttons: inp.buttons & !(JUMP | CROUCH),
+            ..*inp
+        };
+        crate::contact::walk(&mut self.body, self.flag, &held, map);
+    }
+
+    /// Anything of Siege's cards on it: one held or cooling, an offer, a
+    /// hook.
+    pub fn has_cards(&self) -> bool {
+        self.cards != [0; 2] || self.card_cool != [0; 2] || self.offer_left != 0 || self.hooked != 0
     }
 
     pub fn active(&self) -> bool {
@@ -302,6 +384,7 @@ impl Fighter {
         self.camo = 0;
         self.flare = 0;
         self.mount = Mount::default();
+        self.hooked = 0;
     }
 
     /// One tick of this fighter in a match `phase`: what the browser runs to
@@ -335,7 +418,22 @@ impl Fighter {
         self.yaw = inp.yaw;
         self.pitch = inp.pitch;
         let seat = self.riding().map(|(_, s)| s);
-        if seat.is_none() {
+        // Siege's cards: each cools, a tap plays it (the grapple here, the
+        // rest the world's), and a hook pulls in place of the walk.
+        for c in self.card_cool.iter_mut() {
+            dec(c);
+        }
+        for (k, b) in [CARD_A, CARD_B].into_iter().enumerate() {
+            if pressed & b != 0 && seat.is_none() {
+                self.play_card(k, map, &mut out);
+            }
+        }
+        out.pick = (pressed & PICK_A != 0) as u8 | ((pressed & PICK_B != 0) as u8) << 1;
+        if seat.is_some() {
+            self.hooked = 0;
+        } else if self.hooked > 0 {
+            self.pull(inp, pressed, map);
+        } else {
             crate::contact::walk(&mut self.body, self.flag, inp, map);
         }
         let gunning = self.gunning(map);
@@ -699,6 +797,21 @@ impl Thing for Fighter {
             h.bool(self.mount.vent);
             if self.mount.bomb != 0 {
                 h.u16(self.mount.bomb);
+            }
+        }
+        // Only once it has a card or an offer, so a mode without hashes as
+        // it did.
+        if self.has_cards() {
+            h.u8(0xF4);
+            for k in 0..2 {
+                h.u8(self.cards[k]);
+                h.u16(self.card_cool[k]);
+                h.u8(self.offer[k]);
+            }
+            h.u16(self.offer_left);
+            h.u16(self.hooked);
+            if self.hooked != 0 {
+                h.v3(self.hook);
             }
         }
     }

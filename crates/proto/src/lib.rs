@@ -25,7 +25,7 @@ use sim::movement::Body;
 use sim::vehicle::Vehicle;
 use sim::world::Rules;
 
-pub const PROTO_VER: u16 = 38;
+pub const PROTO_VER: u16 = 39;
 /// What every lobby ticket starts with (the server makes them, `auth.rs`;
 /// the client reads one's own fields back to know whose it is).
 pub const TICKET_PREFIX: &str = "os1.";
@@ -350,7 +350,8 @@ pub struct NearHull {
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct ProjState {
     /// `sim::world::ProjKind` as a number: 0 rocket, 1 frag, 2 ion bolt,
-    /// 3 charged bolt, 4 shard, 5 launcher grenade, 6 cannon ball, 7 sticky.
+    /// 3 charged bolt, 4 shard, 5 launcher grenade, 6 cannon ball, 7 sticky,
+    /// 8 Siege's frost bird.
     pub kind: u8,
     pub owner: u8,
     pub pos: V3,
@@ -621,16 +622,19 @@ impl Pack for Remote {
     }
 }
 
+/// A projectile's kind (`ProjState::kind`).
+const PROJ_KIND_BITS: u32 = 4;
+
 impl Pack for ProjState {
     fn pack(&self, w: &mut BitWriter) -> R<()> {
-        w.write(self.kind as u32, 3)?;
+        w.write(self.kind as u32, PROJ_KIND_BITS)?;
         w.write(self.owner as u32, SLOT_BITS)?;
         w_v3c(w, self.pos)?;
         w_v3c(w, self.vel)
     }
     fn unpack(r: &mut BitReader) -> R<Self> {
         Ok(ProjState {
-            kind: r.read(3)? as u8,
+            kind: r.read(PROJ_KIND_BITS)? as u8,
             owner: r.read(SLOT_BITS)? as u8,
             pos: r_v3c(r)?,
             vel: r_v3c(r)?,
@@ -1210,7 +1214,57 @@ fn w_own(w: &mut BitWriter, f: &Fighter) -> R<()> {
             w.write(m.bomb as u32, BOOST_BITS)?;
         }
     }
+    // Siege's cards, only its own (a bit, then all of it only if any):
+    // each hand's card and its cool, an offer open to it, the hook.
+    w.write_bit(f.has_cards())?;
+    if f.has_cards() {
+        for k in 0..2 {
+            w.write(f.cards[k] as u32, CARD_BITS)?;
+            w_card_cool(w, f.card_cool[k])?;
+        }
+        w.write_bit(f.offer_left != 0)?;
+        if f.offer_left != 0 {
+            w.write(f.offer[0] as u32, CARD_BITS)?;
+            w.write(f.offer[1] as u32, CARD_BITS)?;
+            w.write(f.offer_left as u32, OFFER_BITS)?;
+        }
+        w.write_bit(f.hooked != 0)?;
+        if f.hooked != 0 {
+            w.write(f.hooked as u32, HOOK_BITS)?;
+            for c in [f.hook.x, f.hook.y, f.hook.z] {
+                w_grid(w, c)?;
+            }
+        }
+    }
     Ok(())
+}
+
+/// A card's kind; a card's cool (to the longest's), an offer's and a
+/// hook's ticks left.
+const CARD_BITS: u32 = 2;
+const CARD_COOL_BITS: u32 = 14;
+const OFFER_BITS: u32 = 11;
+const HOOK_BITS: u32 = 8;
+const _: () = assert!(sim::card::KINDS as u32 <= 1 << CARD_BITS);
+const _: () = assert!(sim::consts::ticks(sim::consts::BIRD_COOL_MS) < 1 << CARD_COOL_BITS);
+const _: () = assert!(sim::consts::ticks(sim::consts::REWIND_COOL_MS) < 1 << CARD_COOL_BITS);
+const _: () = assert!(sim::consts::ticks(sim::consts::OFFER_MS) < 1 << OFFER_BITS);
+const _: () = assert!(sim::consts::ticks(sim::consts::GRAPPLE_MS) < 1 << HOOK_BITS);
+
+fn w_card_cool(w: &mut BitWriter, t: u16) -> R<()> {
+    w.write_bit(t != 0)?;
+    if t != 0 {
+        w.write(t as u32, CARD_COOL_BITS)?;
+    }
+    Ok(())
+}
+
+fn r_card_cool(r: &mut BitReader) -> R<u16> {
+    Ok(if r.read_bit()? {
+        r.read(CARD_COOL_BITS)? as u16
+    } else {
+        0
+    })
 }
 
 /// Grenades of a kind carried, to `GREN_MAX`; a seat in a vehicle (its
@@ -1324,6 +1378,20 @@ fn r_own(r: &mut BitReader) -> R<Fighter> {
         };
         if r.read_bit()? {
             f.mount.bomb = r.read(BOOST_BITS)? as u16;
+        }
+    }
+    if r.read_bit()? {
+        for k in 0..2 {
+            f.cards[k] = r.read(CARD_BITS)? as u8;
+            f.card_cool[k] = r_card_cool(r)?;
+        }
+        if r.read_bit()? {
+            f.offer = [r.read(CARD_BITS)? as u8, r.read(CARD_BITS)? as u8];
+            f.offer_left = r.read(OFFER_BITS)? as u16;
+        }
+        if r.read_bit()? {
+            f.hooked = r.read(HOOK_BITS)? as u16;
+            f.hook = V3::new(r_grid(r)?, r_grid(r)?, r_grid(r)?);
         }
     }
     Ok(f)

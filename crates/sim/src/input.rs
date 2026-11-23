@@ -18,11 +18,17 @@ pub const ZOOM: u16 = 1 << 8;
 pub const FIRE_LEFT: u16 = 1 << 9;
 /// Frags or stickies for the next throw.
 pub const GREN_SWITCH: u16 = 1 << 10;
+/// Siege's cards (`card.rs`): play the card in the first hand, the second;
+/// take the first card an offer holds, the second.
+pub const CARD_A: u16 = 1 << 11;
+pub const CARD_B: u16 = 1 << 12;
+pub const PICK_A: u16 = 1 << 13;
+pub const PICK_B: u16 = 1 << 14;
 /// Buttons on the wire, and the bits they take there.
-pub const BUTTON_BITS: u32 = 11;
+pub const BUTTON_BITS: u32 = 15;
 pub const BUTTONS: u16 = (1 << BUTTON_BITS) - 1;
 /// Buttons that act on the tick they go down, not while held.
-pub const TAPS: u16 = MELEE | GRENADE | RELOAD | SWAP | USE | GREN_SWITCH;
+pub const TAPS: u16 = MELEE | GRENADE | RELOAD | SWAP | USE | GREN_SWITCH | CARD_A | CARD_B | PICK_A | PICK_B;
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct Input {

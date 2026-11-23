@@ -717,16 +717,19 @@ its base. Casual.
   middle; a player breaking that is the push. Killing one is no kill.
 - **Bots** in Siege's seats aim worse than elsewhere, so people decide it.
 - **Longer than Halo's:** 25 minutes, then two minutes of sudden death with
-  every core open, then the side that broke more wins. Respawn is Halo's 3 s
-  (lengthening late is still to come).
+  every core open, then the side that broke more wins. Respawn starts at
+  Halo's 3 s and grows a second every 4 minutes played, to 9 s, and is 9 s
+  in sudden death (`World::respawn_ticks`), so a late push can be answered.
 - No motion tracker and no minimap, as every mode (§1).
 
 **How it sits in the sim:**
 - A fighter's cards are a fixed array of two; offers, cooldowns and charge are
   ticks; caps are in `consts.rs`. No allocation in `World::step`.
-- A card that reads only its fighter and the map (grapple, hover, rewind) is
-  in `Fighter::step_local` and predicted like walking; one that touches
-  another body is `World`'s (§17's prediction gate).
+- A card that reads only its fighter and the map (the grapple) is in
+  `Fighter::step_local` and predicted like walking; one that touches the
+  world is `World`'s (§17's prediction gate). The rewind is the world's: its
+  5 s of places would cost every own snapshot, so the client sees it as a
+  correction.
 - Generators and cores are a kind of `Thing` (`World::nodes`), placed by a
   map's `"siege"` (Dry Fork's and Icefall's), always sent; caches will be one
   too.
@@ -734,19 +737,36 @@ its base. Casual.
   where it can be seen or heard, as a shot is (§8). An offer is told only to
   its fighter. Every card's projectile, area and reveal has a rule in
   `fog.rs` and a line in the leak gate.
-- The rewind needs 5 s of each fighter's pose and shields, beside the 250 ms
-  that lag compensation keeps (§7).
+- The rewind keeps each fighter's place, shields and health every 250 ms
+  for 5 s in its life (`World::kept`), beside the 250 ms that lag
+  compensation keeps (§7).
 - Offers, a cache's contents and where a drop lands are keyed by the salt
   (§9): nothing a client could know before it happens.
 - Bots play Siege: they take cards, use them, loot caches and go for the
   generators.
+
+**Phase 1 as built** (`sim/src/card.rs`, `client/src/cards.rs`):
+- Three cards. **Grapple:** a hook along the aim that bites the map within
+  32 m and pulls the body there at 20 m/s (JUMP lets go with all of its
+  speed; arriving, a vault); 7 s to play again, a miss 0.6 s. **Rewind:** back
+  where it stood 5 s ago in this life, with the shields and health it had
+  then if more; 30 s. **Frost bird:** a slow round (14 m/s) its holder steers
+  onto their line of sight for 6 s, bursting on what it meets: shields
+  stripped and a bite, never a kill from full; 60 s, and dealt half as often.
+- Everyone starts with an offer's worth; a kill earns 2, each of a side in a
+  generator's ring when it breaks 3, each 5 s overloading an enemy ring 1;
+  at 4, two cards it doesn't hold are offered for 12 s. Taking a third card
+  replaces the one held longer. Keys: X / Mouse 4 and 3 / Mouse 5 play the
+  first and second hand's card; 4 and 5 take an offer's first or second.
+- Still to come: a dropped card lying where it fell, cards on the touch
+  controls, a remote grappler's line drawn for others.
 
 **The phases**, each kept only if it plays:
 
 | Phase | What | The question |
 |---|---|---|
 | 0 · The base | generators, cores, towers and minions on Dry Fork and Icefall, Siege's playlist with bots that play as a side (keepers, rovers, pushers crewing trucks), no cards (done) | does a purpose keep Big Team's players? |
-| 1 · Cards | a few cards (grapple, rewind, the frost bird), offered in Siege | do cards feel right in this sim and netcode, and on maps built for walking? |
+| 1 · Cards | a few cards (grapple, rewind, the frost bird), offered in Siege (built) | do cards feel right in this sim and netcode, and on maps built for walking? |
 | 2 · Caches | air drops, rare ultimates, a deck worth dealing from | do players come back for the luck? |
 | 3 · A ladder | a Siege ladder, then cups | only if phase 2 holds players |
 

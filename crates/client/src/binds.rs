@@ -268,6 +268,12 @@ pub enum Action {
     Reload,
     Swap,
     Use,
+    /// Siege's cards (`sim::card`): play the first hand's, the second's;
+    /// take an offer's first card, its second.
+    CardA,
+    CardB,
+    PickA,
+    PickB,
     NetGraph,
     Scores,
     /// The party's push-to-talk: the page reads it (`party.rs`,
@@ -275,7 +281,7 @@ pub enum Action {
     Talk,
 }
 
-pub const COUNT: usize = 19;
+pub const COUNT: usize = 23;
 
 pub struct Spec {
     pub action: Action,
@@ -392,6 +398,30 @@ pub static SPECS: [Spec; COUNT] = [
         token: "use",
         name: "Action: pick up, take flag, get in",
         default: [k(KeyCode::KeyE), None],
+    },
+    Spec {
+        action: Action::CardA,
+        token: "card_a",
+        name: "Play first card (Siege)",
+        default: [k(KeyCode::KeyX), m(MouseButton::Back)],
+    },
+    Spec {
+        action: Action::CardB,
+        token: "card_b",
+        name: "Play second card (Siege)",
+        default: [k(KeyCode::Digit3), m(MouseButton::Forward)],
+    },
+    Spec {
+        action: Action::PickA,
+        token: "pick_a",
+        name: "Take an offer's first card",
+        default: [k(KeyCode::Digit4), None],
+    },
+    Spec {
+        action: Action::PickB,
+        token: "pick_b",
+        name: "Take an offer's second card",
+        default: [k(KeyCode::Digit5), None],
     },
     Spec {
         action: Action::NetGraph,

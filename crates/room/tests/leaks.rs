@@ -82,6 +82,8 @@ struct Gate {
     /// Hulls sent in our bubble, checked, and those not drawn wholly in
     /// the past.
     near_seen: usize,
+    /// Snapshots our fighter held a card in (Siege).
+    cards_seen: usize,
     share_seen: usize,
     foot_seen: usize,
     /// The last snapshot's: each hull's share if near, which were sent,
@@ -113,6 +115,17 @@ impl Gate {
         // Nobody (`proto::NOBODY`, an event's fighter past the seats) is
         // never known.
         let known = |q: usize| q < MAX_FIGHTERS && (q == self.me || mate(q) || sent.contains(&q));
+        // 22. Siege's cards ride our own record alone: ours, as the server
+        // has them; an offer is told to nobody else (no other record has a
+        // field for a card).
+        let mine = &w.fighters[self.me];
+        assert_eq!(
+            (s.own.cards, s.own.offer, s.own.offer_left, s.own.hooked),
+            (mine.cards, mine.offer, mine.offer_left, mine.hooked),
+            "tick {}: our cards",
+            w.tick
+        );
+        self.cards_seen += (mine.cards != [0; 2]) as usize;
         // Every kind on the wire has its check; no wildcard, so a new kind
         // doesn't compile until it has one.
         for k in sim::thing::Kind::ALL {
@@ -739,6 +752,7 @@ fn gate_at(map: Map, rules: Rules, every: u32) {
         events_seen: 0,
         stuck_seen: 0,
         near_seen: 0,
+        cards_seen: 0,
         share_seen: 0,
         foot_seen: 0,
         near_last: [None; sim::consts::MAX_VEHICLES],
@@ -851,6 +865,13 @@ fn gate_at(map: Map, rules: Rules, every: u32) {
         assert!(g.vehicles_seen > 100, "only {} vehicles sent to check", g.vehicles_seen);
         assert!(g.near_seen > 300, "only {} bubble hulls sent to check", g.near_seen);
         assert!(g.share_seen > 100, "only {} drawn off the render tick", g.share_seen);
+    }
+    if g.room.world.cards_on() {
+        assert!(
+            g.cards_seen > 100,
+            "only {} snapshots with a card to check",
+            g.cards_seen
+        );
     }
     assert!(medals > 0, "no medal to check");
     assert_eq!(
