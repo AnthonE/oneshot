@@ -227,6 +227,8 @@ pub enum ProjKind {
     Cannon,
     /// A sticky grenade.
     Sticky,
+    /// Siege's frost bird (`card::BIRD`): slow, steered by its holder's aim.
+    Bird,
 }
 
 /// A projectile homing on nobody.
@@ -466,6 +468,10 @@ impl Thing for Minion {
     }
 }
 
+/// A place the rewind may go back to: the tick it was kept, the feet, the
+/// shields and health then.
+type Kept = (u32, V3, i32, i32);
+
 /// `Clone`, so a match can be forked and each branch stepped on (the aim
 /// windows' twins, `tools/aim`); the server never clones one.
 #[derive(Clone)]
@@ -522,6 +528,16 @@ pub struct World {
     /// death can have reached its player's screen ([`Self::play`]). Not
     /// hashed: what it fires is.
     ghosts: [Option<(u32, Fighter)>; MAX_FIGHTERS],
+    /// Siege's cards: what each seat's play has earned toward its next
+    /// offer, and its ticks overloading an enemy ring toward the next
+    /// merit's worth.
+    merit: [u16; MAX_FIGHTERS],
+    ring_t: [u16; MAX_FIGHTERS],
+    /// Where each seat stood, kept every `REWIND_EVERY_MS` for the rewind:
+    /// the tick, its feet, its shields and health. The tick its life began.
+    /// Not hashed: it is the fighters', which are.
+    kept: Box<[[Kept; REWIND_KEPT]; MAX_FIGHTERS]>,
+    born: [u32; MAX_FIGHTERS],
 }
 
 /// What one shooter saw of each target (by [`TARGETS`] index): its share of
@@ -603,6 +619,10 @@ impl World {
             ran: [Input::default(); MAX_FIGHTERS],
             lag: Lag::past([0; MAX_FIGHTERS]),
             ghosts: [None; MAX_FIGHTERS],
+            merit: [OFFER_MERIT; MAX_FIGHTERS],
+            ring_t: [0; MAX_FIGHTERS],
+            kept: Box::new([[(0, V3::ZERO, 0, 0); REWIND_KEPT]; MAX_FIGHTERS]),
+            born: [0; MAX_FIGHTERS],
         }
     }
 
@@ -620,10 +640,11 @@ impl World {
     /// (`vehicle::stick`: a truck's `mx`, `mz`; a one-seater's aim and
     /// boost and roll too): what its passenger, or someone by it, predicts
     /// it on, as kept on (the only part of an input
-    /// [`Vehicle::step_local`] reads). None if nobody drives it (it is
-    /// parked: [`Vehicle::step_parked`]), as [`Self::step`] will next tick.
+    /// [`Vehicle::step_local`] reads). None if nobody drives it, or its
+    /// engine is stalled (either way it steps parked:
+    /// [`Vehicle::step_parked`]), as [`Self::step`] will next tick.
     pub fn drive_stick(&self, i: usize) -> Option<Input> {
-        let v = self.vehicles.get(i).filter(|v| v.active)?;
+        let v = self.vehicles.get(i).filter(|v| v.active && v.stall == 0)?;
         let d = v.driver().filter(|&d| self.fighters[d].active())?;
         Some(crate::vehicle::stick(v.kind, &self.ran[d]))
     }
@@ -641,6 +662,8 @@ impl World {
         if !self.rules.teams {
             self.score[slot] = 0;
         }
+        self.merit[slot] = OFFER_MERIT;
+        self.ring_t[slot] = 0;
         self.respawn(slot);
     }
 
@@ -797,6 +820,11 @@ impl World {
         }
         sc.put(&mut self.fighters, &mut self.vehicles);
         for (s, l) in locals.iter().enumerate() {
+            if l.card != 0 || l.pick != 0 {
+                self.cards_play(s, l.card, l.pick);
+            }
+        }
+        for (s, l) in locals.iter().enumerate() {
             if l.fired || l.fired_left || l.melee || l.throw || l.mounted || l.bombed {
                 self.unveil(s);
             }
@@ -860,6 +888,7 @@ impl World {
         self.fly_drops();
         self.flags_tick();
         self.nodes_tick();
+        self.cards_tick();
         if self.siege_on() && self.phase == Phase::Playing {
             self.towers();
             self.minions_tick();
@@ -928,10 +957,14 @@ impl World {
                     _ if charged => (ProjKind::Charge, a.charge_speed),
                     _ => (ProjKind::Bolt, a.speed),
                 };
-                // A homing round locks on whoever the aim was on, as seen.
+                // A homing round locks on whoever the aim was on, as seen; a
+                // rocket only on a hull, a charged bolt on one if no body.
                 let mut target = NO_TARGET;
                 if matches!(kind, ProjKind::Needle | ProjKind::Charge) {
                     target = self.lock(s, eye, base, a, depth);
+                }
+                if matches!(kind, ProjKind::Rocket | ProjKind::Charge) && target == NO_TARGET {
+                    target = self.lock_hull(s, eye, base, a.aim_range, depth);
                 }
                 // A round that flies straight lives as long as its range
                 // takes; one that blows up, till it lands.
@@ -1165,6 +1198,51 @@ impl World {
             Some((Target::Fighter(q, _), _)) => q as u8,
             _ => NO_TARGET,
         }
+    }
+
+    /// Which hull a rocket or a charged bolt from `eye` along `dir` locks
+    /// on, as `s` saw it: of those an enemy of `s` rides, within `reach`,
+    /// whose middle the aim passes within [`VEH_LOCK_CONE`] of (widened by
+    /// its half length at its distance), the nearest in angle, in clear
+    /// line. `MAX_FIGHTERS` + its slot, as a sticky on it names it, or
+    /// [`NO_TARGET`].
+    fn lock_hull(&self, s: usize, eye: V3, dir: V3, reach: f32, depth: u32) -> u8 {
+        let ride = self.fighters[s].riding().map(|(i, _)| i);
+        let mut best: Option<(f32, usize)> = None;
+        for (i, v) in self.vehicles.iter().enumerate() {
+            if !v.active || ride == Some(i) {
+                continue;
+            }
+            let foe = v.seats.iter().any(|&x| {
+                x != 0 && x as usize - 1 != s && self.fighters[x as usize - 1].active() && !self.mate(s, x as usize - 1)
+            });
+            if !foe {
+                continue;
+            }
+            let p = self.vrewind.pose_at(
+                self.tick,
+                i,
+                self.lag.seen[s].depth(depth, MAX_FIGHTERS + i),
+                &VPose::of(v),
+            );
+            if !p.alive {
+                continue;
+            }
+            let c = p.pos + V3::new(0.0, v.spec().h * 0.5, 0.0);
+            let to = c - eye;
+            let t = to.dot(dir);
+            if t <= 0.0 || t > reach {
+                continue;
+            }
+            let off = (to - dir * t).len() / t;
+            if off > VEH_LOCK_CONE + v.spec().half_l / t || best.is_some_and(|b| b.0 <= off) {
+                continue;
+            }
+            if self.map.clear(eye, c) {
+                best = Some((off, i));
+            }
+        }
+        best.map_or(NO_TARGET, |(_, i)| (MAX_FIGHTERS + i) as u8)
     }
 
     /// Bullet magnetism: of the enemies a ray from `eye` along `dir`
@@ -1665,15 +1743,35 @@ impl World {
     /// is still flying.
     fn fly(&mut self, p: &mut Projectile) -> bool {
         let a = arm(p.arm);
-        if a.homing > 0.0 && (p.target as usize) < MAX_FIGHTERS {
-            let v = self.fighters[p.target as usize];
+        let t = p.target as usize;
+        // Where it homes, and how fast it turns: a body's chest, or a
+        // hull's middle (a rocket's own rate; a charged bolt's its gun's).
+        let homing = if a.homing > 0.0 && t < MAX_FIGHTERS {
+            let v = self.fighters[t];
+            let chest = crate::movement::ducked(v.body.duck, CHEST_Y, CHEST_Y_CROUCH);
+            v.active().then(|| (v.body.pos + V3::new(0.0, chest, 0.0), a.homing))
+        } else if (MAX_FIGHTERS..MAX_FIGHTERS + MAX_VEHICLES).contains(&t)
+            && matches!(p.kind, ProjKind::Rocket | ProjKind::Charge)
+        {
+            let v = self.vehicles[t - MAX_FIGHTERS];
+            let rate = if p.kind == ProjKind::Rocket {
+                ROCKET_VEH_HOMING
+            } else {
+                a.homing
+            };
+            v.active.then(|| (v.pos + V3::new(0.0, v.spec().h * 0.5, 0.0), rate))
+        } else if p.kind == ProjKind::Bird {
+            self.bird_steer(p)
+        } else {
+            None
+        };
+        if let Some((at, rate)) = homing {
             let speed = p.vel.len();
-            if v.active() && speed > 0.0 {
-                let chest = crate::movement::ducked(v.body.duck, CHEST_Y, CHEST_Y_CROUCH);
-                let to = (v.body.pos + V3::new(0.0, chest, 0.0) - p.pos).norm();
+            if speed > 0.0 {
+                let to = (at - p.pos).norm();
                 let d = p.vel * (1.0 / speed);
                 let chord = (to - d).len();
-                let turn = a.homing * DT;
+                let turn = rate * DT;
                 let nd = if chord <= turn {
                     to
                 } else {
@@ -1691,7 +1789,7 @@ impl World {
         }
         let d = p.vel * (1.0 / speed);
         let step = speed * DT;
-        let blasts = matches!(p.kind, ProjKind::Rocket | ProjKind::Cannon);
+        let blasts = matches!(p.kind, ProjKind::Rocket | ProjKind::Cannon | ProjKind::Bird);
         let (t, met, who) = self.flight_hit(p, d, step, !blasts);
         if met || p.ttl == 0 {
             let at = p.pos + d * (t - 0.05).max(0.0);
@@ -1725,6 +1823,9 @@ impl World {
             (ProjKind::Rocket | ProjKind::Cannon | ProjKind::Lob, _) => {
                 self.blast(at, owner, a.dmg, a.radius, a.full, 0, 0.5, cause);
             }
+            (ProjKind::Bird, _) => {
+                self.blast(at, owner, BIRD_DMG, BIRD_RADIUS, BIRD_FULL, 0, 0.5, Cause::Bird as u16);
+            }
             (ProjKind::Bolt, Some(Target::Fighter(q, _))) => {
                 self.damage_k(owner, q, a.dmg * PT, false, Head::None, cause, a.shield_k);
             }
@@ -1738,6 +1839,11 @@ impl World {
             }
             (ProjKind::Charge, Some(Target::Vehicle(i))) => {
                 self.damage_vehicle(owner, i, CHARGE_VEH_DMG * PT);
+                let v = &mut self.vehicles[i];
+                if v.active {
+                    v.stall = ticks(VEH_STALL_MS) as u16;
+                    v.boosting = false;
+                }
             }
             (ProjKind::Bolt | ProjKind::Needle | ProjKind::Charge, Some(Target::Minion(i))) => {
                 self.hurt_minion(owner as u8, i, a.dmg.max(CHARGE_VEH_DMG) * PT);
@@ -2587,6 +2693,10 @@ impl World {
         self.leave_vehicle(vic);
         // Off the map, the flag goes home; otherwise it falls with them.
         self.drop_flag(vic, cause == crate::events::Cause::Fall as u16, false);
+        if self.cards_on() && att != vic && att < MAX_FIGHTERS && !self.mate(att, vic) {
+            self.merit[att] = self.merit[att].saturating_add(MERIT_KILL);
+        }
+        let respawn = self.respawn_ticks();
         let v = &mut self.fighters[vic];
         v.alive = false;
         v.health = 0;
@@ -2594,11 +2704,12 @@ impl World {
         v.charging = false;
         v.camo = 0;
         v.flare = 0;
+        v.hooked = 0;
         // What they held leaves their hands with some of how they moved.
         let toss = v.body.vel * DROP_CARRY + V3::new(0.0, DROP_TOSS, 0.0);
         v.body.vel = V3::ZERO;
         v.needles = 0;
-        v.respawn = ticks(self.rules.respawn_ms()) as u16;
+        v.respawn = respawn;
         v.deaths += 1;
         let vteam = v.team;
         let pos = v.body.pos;
@@ -2841,6 +2952,208 @@ impl World {
         self.rules.siege && self.rules.teams && self.map.siege.is_some()
     }
 
+    /// Siege's cards are dealt here (docs/DESIGN.md §18, phase 1).
+    pub fn cards_on(&self) -> bool {
+        self.siege_on()
+    }
+
+    /// How long one killed now is down: the mode's
+    /// ([`Rules::respawn_ms`]); in Siege, longer as the match goes on (a
+    /// second more each `SIEGE_RESPAWN_STEP_MS` played, to
+    /// `SIEGE_RESPAWN_MAX_MS`), and longest in sudden death, so a late
+    /// push can be answered.
+    pub fn respawn_ticks(&self) -> u16 {
+        let base = self.rules.respawn_ms();
+        if !self.siege_on() {
+            return ticks(base) as u16;
+        }
+        let played = ticks(self.rules.time_limit_ms).saturating_sub(self.clock) + self.overtime;
+        let steps = played / ticks(SIEGE_RESPAWN_STEP_MS);
+        let ms = if self.overtime > 0 {
+            SIEGE_RESPAWN_MAX_MS
+        } else {
+            (base + steps * 1000).min(SIEGE_RESPAWN_MAX_MS)
+        };
+        ticks(ms) as u16
+    }
+
+    /// Seat `s`'s cards played this tick (`played`, a bit a hand: the
+    /// world's, the rewind and the frost bird), and an offer's pick
+    /// (`pick`, a bit each for its first and second card).
+    fn cards_play(&mut self, s: usize, played: u8, pick: u8) {
+        if !self.cards_on() {
+            return;
+        }
+        let f = self.fighters[s];
+        if pick != 0 && f.offer_left > 0 && f.seated {
+            let k = if pick & 1 != 0 { 0 } else { 1 };
+            self.take_card(s, f.offer[k]);
+        }
+        for k in 0..2 {
+            if played & (1 << k) == 0 || !self.fighters[s].active() {
+                continue;
+            }
+            match f.cards[k] {
+                crate::card::REWIND => {
+                    if !self.rewind_to(s) {
+                        // Nowhere to go back to: the card waits for none.
+                        self.fighters[s].card_cool[k] = 0;
+                    }
+                }
+                crate::card::BIRD => {
+                    let eye = f.eye();
+                    let dir = aim_dir(f.yaw, f.pitch);
+                    let made = self.launch(
+                        Projectile {
+                            kind: ProjKind::Bird,
+                            arm: crate::arms::NONE,
+                            target: NO_TARGET,
+                            pos: eye + dir * 0.6,
+                            vel: dir * BIRD_SPEED,
+                            ttl: ticks(BIRD_MS) as u16,
+                            ..Projectile::default()
+                        },
+                        s,
+                    );
+                    if !made {
+                        self.fighters[s].card_cool[k] = 0;
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+
+    /// Seat `s` takes `card` from its offer: into an empty hand, else in
+    /// place of the one held longer (the first; the second moves up). The
+    /// offer closes.
+    fn take_card(&mut self, s: usize, card: u8) {
+        let f = &mut self.fighters[s];
+        f.offer = [crate::card::NONE; 2];
+        f.offer_left = 0;
+        if card == crate::card::NONE || f.cards.contains(&card) {
+            return;
+        }
+        match f.cards.iter().position(|&c| c == crate::card::NONE) {
+            Some(k) => {
+                f.cards[k] = card;
+                f.card_cool[k] = 0;
+            }
+            None => {
+                f.cards = [f.cards[1], card];
+                f.card_cool = [f.card_cool[1], 0];
+            }
+        }
+    }
+
+    /// Seat `s` back where it stood `REWIND_MS` ago in this life (its
+    /// oldest place kept, if it has lived less), its shields and health
+    /// what they were then if more. Whether there was anywhere to go.
+    fn rewind_to(&mut self, s: usize) -> bool {
+        let from = self.tick.saturating_sub(ticks(REWIND_MS)).max(self.born[s]);
+        let mut best: Option<(u32, V3, i32, i32)> = None;
+        for &k in self.kept[s].iter() {
+            if k.0 >= from && k.0 != 0 && best.is_none_or(|b| k.0 < b.0) {
+                best = Some(k);
+            }
+        }
+        let Some((_, at, shield, health)) = best else {
+            return false;
+        };
+        let f = &mut self.fighters[s];
+        f.body.pos = at;
+        f.body.vel = V3::ZERO;
+        f.body.grounded = false;
+        f.hooked = 0;
+        f.shield = f.shield.max(shield);
+        f.health = f.health.max(health);
+        true
+    }
+
+    /// Where a frost bird turns (its holder alive), at `BIRD_TURN`: onto
+    /// its holder's line of sight, at `BIRD_LEAD` past how far it is from
+    /// the eye (never past what the aim meets), so it flies down whatever
+    /// its holder looks at. None: it flies on.
+    fn bird_steer(&self, p: &Projectile) -> Option<(V3, f32)> {
+        let f = &self.fighters[p.owner as usize];
+        if !f.active() {
+            return None;
+        }
+        let eye = f.eye();
+        let dir = aim_dir(f.yaw, f.pitch);
+        let meets = self.map.ray(eye, dir, BIRD_STEER_RANGE);
+        let t = ((p.pos - eye).len() + BIRD_LEAD).min(meets);
+        Some((eye + dir * t, BIRD_TURN))
+    }
+
+    /// Siege's cards' tick: each offer runs down; where everyone stands is
+    /// kept for the rewind; overloading an enemy ring earns; and whoever
+    /// has earned an offer, alive with none open, is dealt one: two cards
+    /// from the deck it doesn't hold, keyed by the salt (nothing a client
+    /// could know before).
+    fn cards_tick(&mut self) {
+        if !self.cards_on() || self.phase != Phase::Playing {
+            return;
+        }
+        let keep = self.tick.is_multiple_of(ticks(REWIND_EVERY_MS));
+        let slot = (self.tick / ticks(REWIND_EVERY_MS)) as usize % REWIND_KEPT;
+        let rings = self.map.siege;
+        for s in 0..MAX_FIGHTERS {
+            let f = self.fighters[s];
+            if !f.seated {
+                continue;
+            }
+            if f.offer_left > 0 {
+                let f = &mut self.fighters[s];
+                f.offer_left -= 1;
+                if f.offer_left == 0 {
+                    f.offer = [crate::card::NONE; 2];
+                }
+            }
+            if !f.active() {
+                continue;
+            }
+            if keep && f.riding().is_none() {
+                self.kept[s][slot] = (self.tick, f.body.pos, f.shield, f.health);
+            }
+            if let Some(at) = rings {
+                let pushing = (0..SIEGE_NODES).any(|n| {
+                    !self.nodes[n].broken
+                        && Self::node_side(n) != f.team as usize & 1
+                        && self.nodes[n].held == NODE_RISING
+                        && f.riding().is_none()
+                        && in_ring(f.body.pos, at[n])
+                });
+                if pushing {
+                    self.ring_t[s] += 1;
+                    if self.ring_t[s] as u32 >= ticks(MERIT_RING_MS) {
+                        self.ring_t[s] = 0;
+                        self.merit[s] = self.merit[s].saturating_add(1);
+                    }
+                }
+            }
+            if self.merit[s] >= OFFER_MERIT && self.fighters[s].offer_left == 0 {
+                self.merit[s] -= OFFER_MERIT;
+                let held = self.fighters[s].cards;
+                let h = sip24(
+                    self.salt.0,
+                    self.salt.1,
+                    (0x0FFE_u64 << 40) | ((s as u64) << 32) | self.tick as u64,
+                    0,
+                );
+                let a = crate::card::deal(h as u32, [held[0], held[1], crate::card::NONE]);
+                let b = crate::card::deal((h >> 32) as u32, [held[0], held[1], a]);
+                let f = &mut self.fighters[s];
+                f.offer = [a, b];
+                f.offer_left = if a == crate::card::NONE {
+                    0
+                } else {
+                    ticks(OFFER_MS) as u16
+                };
+            }
+        }
+    }
+
     /// Ticks of one enemy's overload that break node `n`.
     pub fn node_full(n: usize) -> u32 {
         if Self::is_core(n) {
@@ -2926,6 +3239,14 @@ impl World {
             node.broken = true;
             node.held = NODE_QUIET;
             let by = side ^ 1;
+            if self.cards_on() && !Self::is_core(n) {
+                for s in 0..MAX_FIGHTERS {
+                    let f = &self.fighters[s];
+                    if f.active() && f.riding().is_none() && f.team as usize & 1 == by && in_ring(f.body.pos, ring) {
+                        self.merit[s] = self.merit[s].saturating_add(MERIT_BREAK);
+                    }
+                }
+            }
             self.node_event(0, first, n);
             self.score[by] += 1;
             if Self::is_core(n) {
@@ -3607,6 +3928,7 @@ impl World {
             self.rules.loadout
         };
         self.fighters[s].spawn(sp.pos, sp.yaw, loadout);
+        self.born[s] = self.tick;
         // A practice map is for feeling them: all that can be carried.
         if self.map.practice {
             self.fighters[s].grenades = GREN_MAX;
@@ -3658,6 +3980,13 @@ impl World {
                     if self.rules.siege {
                         hash_all(&self.minions, &mut h);
                         h.u32(self.wave_in);
+                    }
+                    // Siege's cards' earnings, only where they are dealt.
+                    if self.cards_on() {
+                        for s in 0..MAX_FIGHTERS {
+                            h.u16(self.merit[s]);
+                            h.u16(self.ring_t[s]);
+                        }
                     }
                 }
             }

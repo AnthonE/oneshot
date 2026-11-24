@@ -570,6 +570,8 @@ pub struct DrawnVehicle {
     pub pitch: f32,
     pub roll: f32,
     pub boosting: bool,
+    /// Its engine dead, a charged bolt's (`Vehicle::stall`).
+    pub stalled: bool,
 }
 
 /// A flier's roll as drawn, radians: `trick` (`Vehicle::trick`, ticks left,
@@ -1746,6 +1748,8 @@ impl NetCore {
                     trick: v.trick,
                     trick_cool: n.trick_cool,
                     jump: n.jump,
+                    // Stalled, it comes as parked (no stick).
+                    stall: 0,
                 };
                 near.sticks[i] = n.stick;
                 for (seat, &x) in v.seats.iter().enumerate() {
@@ -2167,6 +2171,7 @@ impl NetCore {
                 pitch: pitch_rad(a.pitch) + (pitch_rad(b.pitch) - pitch_rad(a.pitch)) * u,
                 roll: roll_of(a.trick as f32 + (b.trick - a.trick) as f32 * u),
                 boosting: b.boosting,
+                stalled: vn.stalled,
             }
         };
         d.pos = d.pos + self.moff[i];
@@ -2568,6 +2573,7 @@ fn vehicle_between(va: &VehState, a_tick: u32, b: Option<&Frame>, rt: f64) -> Dr
         pitch: pitch_rad(va.pitch),
         roll: roll_of(va.trick as f32),
         boosting: va.boosting,
+        stalled: va.stalled,
     };
     let vb = b.and_then(|b| b.vehicles[..b.nv as usize].iter().find(|v| v.slot == va.slot));
     match (b, vb) {

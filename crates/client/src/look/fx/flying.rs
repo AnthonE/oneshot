@@ -39,6 +39,8 @@ pub const NEEDLE: u8 = 4;
 pub const LOB: u8 = 5;
 pub const CANNON: u8 = 6;
 pub const STICKY: u8 = 7;
+/// Siege's frost bird (`sim::card::BIRD`).
+pub const BIRD: u8 = 8;
 
 /// A rocket's trail: a puff every this many metres.
 const PUFF_EVERY_M: f32 = 0.5;
@@ -76,6 +78,18 @@ const ORB_HEART_M: f32 = 0.2;
 const ORB_WHITE: [f32; 4] = [6.0, 14.0, 8.0, 1.0];
 const ORB_LM: f32 = 340_000.0;
 const ORB_LIGHT_M: f32 = 9.0;
+/// The frost bird: a cold white heart in a wide pale-blue halo, a frost
+/// trail, and its light, bigger than a charge's: a thing seen coming.
+const BIRD_HALO_M: f32 = 1.4;
+const BIRD_HEART_M: f32 = 0.42;
+const FROST: [f32; 4] = [6.0, 10.0, 16.0, 1.0];
+const FROST_HALO: [f32; 4] = [1.2, 2.6, 5.0, 0.8];
+const BIRD_LM: f32 = 400_000.0;
+const BIRD_LIGHT_M: f32 = 12.0;
+/// A grapple's line: a bead this far apart, this big, so many at most.
+const ROPE_STEP_M: f32 = 0.4;
+const ROPE_BEAD_M: f32 = 0.06;
+const ROPE_BEADS_MAX: usize = 96;
 const ORB_BURST: f32 = 0.8;
 /// A shard: tiny, pink. Its sliver's width and length, its glow and heart.
 const SHARD_W_M: f32 = 0.022;
@@ -515,6 +529,17 @@ fn streak(at: Vec3, v: Vec3, cell: u8, width: f32, len: f32, c: [f32; 4]) -> Par
     }
 }
 
+/// A grapple's line this frame, `from` to `to`: frost-blue beads every
+/// `ROPE_STEP_M`.
+pub fn rope(fx: &mut Fx, from: Vec3, to: Vec3) {
+    let d = to - from;
+    let n = ((d.length() / ROPE_STEP_M) as usize).clamp(1, ROPE_BEADS_MAX);
+    for i in 0..=n {
+        fx.glow
+            .spawn(dot(from + d * (i as f32 / n as f32), ROPE_BEAD_M, FROST_HALO));
+    }
+}
+
 /// One round of light this frame.
 pub fn light(fx: &mut Fx, p: &ProjState) {
     let at = Vec3::new(p.pos.x, p.pos.y, p.pos.z);
@@ -532,6 +557,21 @@ pub fn light(fx: &mut Fx, p: &ProjState) {
             }
             fx.glow.spawn(dot(at, BOLT_HEART_M * flicker, BOLT_WHITE));
             trail(fx, at, v, ION);
+        }
+        BIRD => {
+            fx.glow.spawn(dot(at, BIRD_HALO_M, FROST_HALO));
+            fx.glow.spawn(dot(at, BIRD_HEART_M, FROST));
+            trail(fx, at, v, FROST);
+            ride(
+                fx,
+                at,
+                FlashDef {
+                    lumens: BIRD_LM,
+                    range: BIRD_LIGHT_M,
+                    life: 0.08,
+                    color: [0.6, 0.85, 1.0],
+                },
+            );
         }
         // The ball itself is `plasma.rs`'s; this is what glows round it.
         CHARGE => {

@@ -1118,8 +1118,58 @@ impl Bot {
     /// This tick's input for the bot in `slot`.
     pub fn think(&mut self, w: &World, slot: usize) -> Input {
         let mut inp = self.decide(w, slot);
+        self.cards(w, slot, &mut inp);
         mind_the_edge(w, slot, &mut inp);
         inp
+    }
+
+    /// Siege's cards as a bot plays them: an offer taken a moment after it
+    /// comes (either card), the rewind when it is hurt low, the frost bird
+    /// at whom it fights from afar (its aim, on them, steers it), and the
+    /// grapple at the ground by where it walks to when that is far.
+    fn cards(&mut self, w: &World, slot: usize, inp: &mut Input) {
+        let f = &w.fighters[slot];
+        if !w.cards_on() || !f.active() || f.riding().is_some() {
+            return;
+        }
+        let last = f.last_buttons;
+        if f.offer_left > 0 && f.offer_left as u32 + ticks(BOT_PICK_MS) <= ticks(OFFER_MS) {
+            let b = if self.rng.next_bounded(2) == 0 { PICK_A } else { PICK_B };
+            if last & b == 0 {
+                inp.buttons |= b;
+            }
+            return;
+        }
+        let fighting = self.target().map(|q| (w.fighters[q].body.pos - f.body.pos).len());
+        for k in 0..2 {
+            if f.card_cool[k] > 0 {
+                continue;
+            }
+            let b = if k == 0 { CARD_A } else { CARD_B };
+            let go = match f.cards[k] {
+                crate::card::REWIND => f.shield == 0 && f.health < HEALTH_MAX * 2 / 5,
+                crate::card::BIRD => fighting.is_some_and(|d| d > BOT_BIRD_M),
+                crate::card::GRAPPLE => {
+                    let to = self.steer - f.body.pos;
+                    let far = to.flat().len();
+                    if fighting.is_some() || !(BOT_GRAPPLE_M..GRAPPLE_RANGE * 0.9).contains(&far) {
+                        false
+                    } else {
+                        // At the ground by where it walks to.
+                        let at = self.steer + V3::new(0.0, 0.3, 0.0) - f.eye();
+                        inp.yaw = rad_to_yaw(fmath::atan2(at.z, at.x));
+                        inp.pitch = (fmath::atan2(at.y, at.flat().len()) * (65536.0 / core::f32::consts::TAU)) as i16;
+                        inp.pitch = inp.pitch.clamp(-PITCH_MAX, PITCH_MAX);
+                        true
+                    }
+                }
+                _ => false,
+            };
+            if go && last & b == 0 {
+                inp.buttons |= b;
+                return;
+            }
+        }
     }
 
     /// Whether its job has it going somewhere that matters, past fights

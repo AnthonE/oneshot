@@ -912,7 +912,7 @@ pub fn decide(
     // Engines: ours (predicted), and every other hull with a driver.
     let mut on = ear.own_engine;
     let own_src = own_vehicle
-        .filter(|(veh, _, _)| veh.seats[sim::vehicle::DRIVER] != 0)
+        .filter(|(veh, _, _)| veh.seats[sim::vehicle::DRIVER] != 0 && veh.stall == 0)
         .map(|(veh, p, _)| {
             let speed = if veh.kind == sim::vehicle::FLIER {
                 v(veh.vel).length()
@@ -947,7 +947,7 @@ pub fn decide(
         h.vel += (raw.clamp_length_max(60.0) - h.vel) * (dt / 0.15).min(1.0);
         h.pos = p;
         let vel = h.vel;
-        let driven = hv.seats[sim::vehicle::DRIVER] != 0 && hv.health > 0;
+        let driven = hv.seats[sim::vehicle::DRIVER] != 0 && hv.health > 0 && !hv.stalled;
         let speed = if hv.kind == sim::vehicle::FLIER {
             vel.length()
         } else {

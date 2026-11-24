@@ -13,9 +13,19 @@ repos is `RIP.md`.
 | **Duel** | 1v1 Slayer, first to 15 kills or 10 minutes. Ladder `duel`. |
 | **Doubles** | 2v2 Team Slayer, first to 30 or 12 minutes. Ladder `doubles`. |
 | **Cups** | FFA heats of 8, points per placement, Swiss rounds, the top eight into a final (`server/src/cup.rs`). Same match server; ladder `cup`. |
-| **Casual** | FFA, Gun Game and Capture the Flag (4v4, first to 3 captures or 15 minutes) with bots filling empty seats. A party may take a room of its own, with its own map, score and clock. Unranked. |
+| **Casual** | FFA, Gun Game and Capture the Flag (4v4, first to 3 captures or 15 minutes; no touch return, a dropped flag goes home on its clock, 15 s or Big Team's 30 s) with bots filling empty seats. A party may take a room of its own, with its own map, score and clock. Unranked. |
 | **Big Team** | 8v8 Team Slayer on terrain maps with vehicles. Casual first; a ladder once it plays well. |
-| **Siege** (to come) | Team ARAM: everyone the same Spartan, two ability cards at most picked up in the match, generators to break, then the base. Casual (§18). |
+| **Siege** | Team ARAM: everyone the same Spartan, two ability cards at most picked up in the match, generators to break, then the base. On Dry Fork and Icefall, with towers, minions and bots that push. Casual (§18). |
+
+A mode opens by how many are online: with few, everyone plays free for all;
+Gun Game opens at 12, CTF at 20, Big Team and Siege at 32. A mode with people
+in a public room stays open. The lobby tells the title which (`Msg::Modes`),
+and the title greys the rest.
+
+**Maps** (`maps/*/map.json`): the arenas Proving Grounds (the golden's),
+Overpass, Cistern, Bulkhead, Chrysalis, Cloudbreak and Pithead; Big Team's
+Dry Fork and Icefall; and the Range, out of the rotation. A map names its
+modes, or its size does (§16, milestone 9).
 
 Halo's rules, the ones Fireplace's arena already plays:
 - Shields over health. Shields recharge 5 s after the last hit; health follows.
@@ -27,7 +37,7 @@ Halo's rules, the ones Fireplace's arena already plays:
 - Power-ups on pads, taken by walking over them: an overshield and active camo.
 - Medals as Halo's (multi-kills, sprees, assists and the rest), read from the world's events after each tick so a replay gives the same ones (`room/src/medals.rs`); the announcer calls them, and a carnage report ends the match.
 - The Range: a practice map with every gun on a pad, out of the rotation.
-- Melee, a head-shot rule per gun, respawn after 3 s at the spawn farthest from enemies.
+- Melee, a head-shot rule per gun, respawn after 3 s (CTF 8 s, Big Team's CTF 10 s) at the spawn farthest from enemies.
 - No motion tracker in ranked, as Halo's ranked playlists have it. That also removes a radar leak (§8).
 
 **Ranked plays MLG's way** (Duel, Doubles, cups):
@@ -43,9 +53,11 @@ whether a kill, a rating or a placement (Elo Pros' invariant 1).
 Abilities live only in Siege and its Mayhem test (§18); Duel, Doubles and cups
 never have them, and Big Team's own playlist keeps none. Not yet: hidden-information modes beyond fog of war.
 Vehicles and terrain play in Big Team (§16, milestones 9 and 10), to rules
-our own: one ground vehicle, the truck, a driver and a passenger; two of Dry
-Fork's four carry a minigun their passenger guns. Maps and vehicles
-are original; never another game's layout or art.
+our own, three kinds: the truck, a driver and a passenger, some carrying a
+minigun their passenger guns; the skimmer, a one-seat hover bike; and the
+flier, a one-seat attack craft. Dry Fork has a truck and a minigun truck a
+side; Icefall a truck, a minigun truck, a skimmer and a flier a side. Maps
+and vehicles are original; never another game's layout or art.
 
 ## 2 · Architecture
 
@@ -242,7 +254,7 @@ Wallhacks and ESP then have nothing to read. Valorant does the same.
    3). A baked potentially-visible set (2 m cells, a bitset of the cells
    each sees) is the optimisation for when maps and rooms grow; at 2v2 the
    rays below cost a few thousand box tests a snapshot. At 8v8 they were
-   not cheap: 0.6 to 1.9 ms a snapshot on our three maps (`cargo run
+   not cheap: 0.6 to 1.9 ms a snapshot on our first three maps (`cargo run
    --release -p room --example fog_cost`). Two things brought that to
    0.1 to 0.3 ms, under 2% of a core per room:
    - **A box grid** (`sim/src/grid.rs`, 8 m cells): a ray tests only the
@@ -575,8 +587,11 @@ keeps every gate in §17 green and moves a golden only on purpose.
    4,000 m² or more is a Big Team map; the rest are arenas).
    **Launchers** too: a pad in the map that throws a fighter along a set
    velocity. It reads only the fighter and the map, so it predicts exactly
-   and costs no wire. Skiing (low-friction slides down slopes) is a later
-   experiment.
+   and costs no wire. **Skiing**, an experiment: crouched at 5 m/s or more
+   going down a terrain slope (past about 6°), on its ground, a body loses
+   only a third of its speed a second and the slope pulls it on; on the
+   flat or going up a crouch is a crouch. It is the walk's own step, so it
+   predicts exactly; `SKI` in `consts.rs` takes it out whole.
 10. **Vehicles:** one ground vehicle, a driver and a passenger who shoots,
     rewound for hitscan, splatter. Done (`sim/src/vehicle.rs`): it turns
     about y only and meets boxes as three hull circles; USE gets in and out
@@ -589,6 +604,16 @@ keeps every gate in §17 green and moves a golden only on purpose.
     client that may know them. A minigun turret on two of Dry Fork's four
     trucks, gunned by the passenger standing in its ring, predicted by the
     gunner.
+    Then the one-seaters, a pilot who flies and fires their guns, each
+    turning toward where its pilot looks: the skimmer (a hover bike that
+    slides, strafes and boosts with its guns cold) and the flier (its nose
+    following the aim in yaw and pitch, hanging where it is let go, a bomb
+    under its nose). Their hitboxes turn about y only, as the truck's; both
+    on Icefall. Halo 2's two answers to a vehicle: a rocket fired with the
+    aim on a hull an enemy rides locks on it and turns after it (a boost
+    across it or a flier's roll slips it), never on a body; and the ion
+    pistol's charge, which homes on a hull too, kills its engine for 2.5 s
+    (it steps as if parked; a flier falls), its guns still live.
 11. **The delta wire:** snapshots as deltas against the acked baseline, a
     byte budget, events cleared on ack. Events first (done): each event a
     client may be told gets an id and rides every snapshot until one that
@@ -618,7 +643,9 @@ keeps every gate in §17 green and moves a golden only on purpose.
     is gone. Since: the page as two modules (WebGL2 and WebGPU); the title
     (PLAY, ARMORY, PARTY, FRIENDS, CHALLENGES), the Esc menu and settings, a pad on
     them; our own mixer (`mix`, on the audio thread in the browser); the
-    kill cam, medals and the carnage report.
+    kill cam, medals and the carnage report; touch controls on a phone or
+    tablet (a stick, a drag to turn, Halo's buttons round FIRE:
+    `client/src/touch.rs`, played by `ci/phone.mjs`).
 13. **Siege:** ability cards, the generators and the base, the caches, in
     the phases of §18, each kept only if it plays.
 
@@ -693,35 +720,56 @@ its base. Casual.
   middle; a player breaking that is the push. Killing one is no kill.
 - **Bots** in Siege's seats aim worse than elsewhere, so people decide it.
 - **Longer than Halo's:** 25 minutes, then two minutes of sudden death with
-  every core open, then the side that broke more wins. Respawn is Halo's 3 s
-  (lengthening late is still to come).
+  every core open, then the side that broke more wins. Respawn starts at
+  Halo's 3 s and grows a second every 4 minutes played, to 9 s, and is 9 s
+  in sudden death (`World::respawn_ticks`), so a late push can be answered.
 - No motion tracker and no minimap, as every mode (§1).
 
 **How it sits in the sim:**
 - A fighter's cards are a fixed array of two; offers, cooldowns and charge are
   ticks; caps are in `consts.rs`. No allocation in `World::step`.
-- A card that reads only its fighter and the map (grapple, hover, rewind) is
-  in `Fighter::step_local` and predicted like walking; one that touches
-  another body is `World`'s (§17's prediction gate).
+- A card that reads only its fighter and the map (the grapple) is in
+  `Fighter::step_local` and predicted like walking; one that touches the
+  world is `World`'s (§17's prediction gate). The rewind is the world's: its
+  5 s of places would cost every own snapshot, so the client sees it as a
+  correction.
 - Generators and cores are a kind of `Thing` (`World::nodes`), placed by a
-  map's `"siege"` (Dry Fork's), always sent; caches will be one too.
+  map's `"siege"` (Dry Fork's and Icefall's), always sent; caches will be one
+  too.
 - Fog: an enemy's cards are never sent; a card is known when it is used
   where it can be seen or heard, as a shot is (§8). An offer is told only to
   its fighter. Every card's projectile, area and reveal has a rule in
   `fog.rs` and a line in the leak gate.
-- The rewind needs 5 s of each fighter's pose and shields, beside the 250 ms
-  that lag compensation keeps (§7).
+- The rewind keeps each fighter's place, shields and health every 250 ms
+  for 5 s in its life (`World::kept`), beside the 250 ms that lag
+  compensation keeps (§7).
 - Offers, a cache's contents and where a drop lands are keyed by the salt
   (§9): nothing a client could know before it happens.
 - Bots play Siege: they take cards, use them, loot caches and go for the
   generators.
 
+**Phase 1 as built** (`sim/src/card.rs`, `client/src/cards.rs`):
+- Three cards. **Grapple:** a hook along the aim that bites the map within
+  32 m and pulls the body there at 20 m/s (JUMP lets go with all of its
+  speed; arriving, a vault); 7 s to play again, a miss 0.6 s. **Rewind:** back
+  where it stood 5 s ago in this life, with the shields and health it had
+  then if more; 30 s. **Frost bird:** a slow round (14 m/s) its holder steers
+  onto their line of sight for 6 s, bursting on what it meets: shields
+  stripped and a bite, never a kill from full; 60 s, and dealt half as often.
+- Everyone starts with an offer's worth; a kill earns 2, each of a side in a
+  generator's ring when it breaks 3, each 5 s overloading an enemy ring 1;
+  at 4, two cards it doesn't hold are offered for 12 s. Taking a third card
+  replaces the one held longer. Keys: X / Mouse 4 and 3 / Mouse 5 play the
+  first and second hand's card; 4 and 5 take an offer's first or second.
+- Still to come: a dropped card lying where it fell, cards on the touch
+  controls, a remote grappler's line drawn for others.
+
 **The phases**, each kept only if it plays:
 
 | Phase | What | The question |
 |---|---|---|
-| 0 · The base | generators and cores on Dry Fork, Siege's playlist with bots, no cards (done) | does a purpose keep Big Team's players? |
-| 1 · Cards | a few cards (grapple, rewind, the frost bird), offered in Siege | do cards feel right in this sim and netcode, and on maps built for walking? |
+| 0 · The base | generators, cores, towers and minions on Dry Fork and Icefall, Siege's playlist with bots that play as a side (keepers, rovers, pushers crewing trucks), no cards (done) | does a purpose keep Big Team's players? |
+| 1 · Cards | a few cards (grapple, rewind, the frost bird), offered in Siege (built) | do cards feel right in this sim and netcode, and on maps built for walking? |
 | 2 · Caches | air drops, rare ultimates, a deck worth dealing from | do players come back for the luck? |
 | 3 · A ladder | a Siege ladder, then cups | only if phase 2 holds players |
 

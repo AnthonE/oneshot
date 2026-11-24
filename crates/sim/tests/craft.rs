@@ -554,3 +554,163 @@ fn a_fliers_fin_its_wings_tips_and_its_guns_stop_a_shot() {
     }
     assert_eq!(stopped(-2.2, 0.5), None, "the air behind its tail");
 }
+
+/// Seat 1 (blue) on foot `back` metres from `at`, holding gun `id` full,
+/// still. Its eye's aim at `at`.
+fn shooter(w: &mut World, at: V3, back: V3, id: u8) -> (u16, i16) {
+    let p = at + back;
+    w.fighters[1].body.pos = V3::new(p.x, w.map.ground(p.x, p.z), p.z);
+    w.fighters[1].body.vel = V3::ZERO;
+    w.fighters[1].guns[0] = sim::fighter::Gun::full(id);
+    w.fighters[1].cur = 0;
+    aim(w.fighters[1].eye(), at)
+}
+
+/// Both seats' inputs for a tick: the pilot's and the shooter's.
+fn both(w: &mut World, pilot: Input, gun: Input) {
+    let mut inputs = [Input::default(); MAX_FIGHTERS];
+    inputs[0] = pilot;
+    inputs[1] = gun;
+    w.step(&inputs, &NO_LAG);
+}
+
+/// Halo 2's answer to a craft: the ion pistol's charge homes on a hull and
+/// kills its engine. A flier hit hanging in the air falls as an unpiloted
+/// one does, whatever its pilot asks, and flies again once it wears off;
+/// its pilot's client, stepping only its own craft, keeps up through it.
+#[test]
+fn a_charged_bolt_stalls_a_flier_and_it_falls() {
+    let (mut w, i) = aloft(10.0);
+    let v = w.vehicles[i];
+    let mid = v.pos + V3::new(0.0, v.spec().h * 0.5, 0.0);
+    let (yaw, pitch) = shooter(&mut w, mid, V3::new(16.0, 0.0, 6.0), sim::arms::ION_PISTOL);
+    let hold = Input {
+        yaw: v.yaw,
+        mz: 127,
+        pitch: PITCH_MAX,
+        ..Input::default()
+    };
+    let aimed = Input {
+        yaw,
+        pitch,
+        ..Input::default()
+    };
+    // Held to full, aimed off the craft's middle, so the bolt has to home.
+    for _ in 0..ticks(700) {
+        both(
+            &mut w,
+            Input { mz: 0, ..hold },
+            Input {
+                buttons: FIRE,
+                yaw: yaw.wrapping_add(900),
+                ..aimed
+            },
+        );
+    }
+    let map = w.map.clone();
+    let mut craft = w.vehicles[i];
+    let mut stalled_at = None;
+    for t in 0..TICK_HZ * 2 {
+        both(&mut w, Input { mz: 0, ..hold }, aimed);
+        if w.vehicles[i].stall > 0 {
+            stalled_at = Some((t, w.vehicles[i].pos.y));
+            craft = w.vehicles[i];
+            break;
+        }
+    }
+    let (_, y0) = stalled_at.expect("the charge stalled it");
+    assert!(w.vehicles[i].health < v.health, "and hurt it");
+    // Stalled: the stick asks it up, it falls; the pilot predicts it.
+    let mut fell = 0;
+    while w.vehicles[i].stall > 0 {
+        both(&mut w, hold, Input::default());
+        craft.step_local(&hold, &map);
+        craft.health = w.vehicles[i].health;
+        assert_eq!(craft, w.vehicles[i], "the pilot's prediction, stalled");
+        fell += 1;
+    }
+    assert_eq!(fell, ticks(VEH_STALL_MS), "for the stall's length");
+    assert!(
+        w.vehicles[i].pos.y < y0 - 3.0,
+        "it fell: {} from {y0}",
+        w.vehicles[i].pos.y
+    );
+    assert!(!w.vehicles[i].boosting);
+    // Its engine back, it climbs on the same stick.
+    let low = w.vehicles[i].pos.y;
+    for _ in 0..TICK_HZ * 2 {
+        both(&mut w, hold, Input::default());
+    }
+    assert!(w.vehicles[i].pos.y > low, "flying again");
+}
+
+/// Halo 2's launcher locks on a vehicle, never on a body: a rocket fired
+/// with the aim on a skimmer an enemy pilots follows it as it strafes and
+/// meets it; one fired at a body on foot flies straight.
+#[test]
+fn a_rocket_locks_on_a_skimmer_and_not_on_a_body() {
+    let mut w = world();
+    let i = board(&mut w, SKIMMER);
+    let v = w.vehicles[i];
+    let (f, r) = v.axes();
+    let mid = v.pos + V3::new(0.0, v.spec().h * 0.5, 0.0);
+    let (yaw, pitch) = shooter(&mut w, mid, f * 30.0, sim::arms::ROCKET);
+    let fire = Input {
+        buttons: FIRE,
+        yaw,
+        pitch,
+        ..Input::default()
+    };
+    // The pilot strafes hard to its right, facing the shooter.
+    let strafe = Input {
+        yaw: v.yaw,
+        mx: 127,
+        ..Input::default()
+    };
+    both(&mut w, strafe, fire);
+    let rocket = w
+        .proj
+        .iter()
+        .find(|p| p.active && p.owner == 1)
+        .copied()
+        .expect("a rocket");
+    assert_eq!(rocket.target as usize, MAX_FIGHTERS + i, "locked on the hull");
+    let full = w.vehicles[i].health;
+    for _ in 0..TICK_HZ * 2 {
+        both(
+            &mut w,
+            strafe,
+            Input {
+                yaw,
+                pitch,
+                ..Input::default()
+            },
+        );
+        if w.vehicles[i].health < full || !w.vehicles[i].active {
+            break;
+        }
+    }
+    let slid = (w.vehicles[i].pos - v.pos).dot(r);
+    assert!(slid > 3.0, "it strafed {slid} m");
+    assert!(
+        w.vehicles[i].health < full || !w.vehicles[i].active,
+        "the rocket followed it and hit"
+    );
+
+    // A body on foot: no lock.
+    let mut w = world();
+    let at = w.fighters[0].body.pos + V3::new(0.0, 1.2, 0.0);
+    let (yaw, pitch) = shooter(&mut w, at, V3::new(25.0, 0.0, 0.0), sim::arms::ROCKET);
+    both(
+        &mut w,
+        Input::default(),
+        Input {
+            buttons: FIRE,
+            yaw,
+            pitch,
+            ..Input::default()
+        },
+    );
+    let rocket = w.proj.iter().find(|p| p.active && p.owner == 1).expect("a rocket");
+    assert_eq!(rocket.target, sim::world::NO_TARGET, "no lock on a body");
+}

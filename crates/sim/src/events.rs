@@ -90,6 +90,8 @@ pub enum Cause {
     /// (`arms::WING_BOLTS`): their pilots' shots carry them as their gun.
     Bolts = 110,
     WingBolts = 111,
+    /// Siege's frost bird (`card::BIRD`).
+    Bird = 112,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq)]

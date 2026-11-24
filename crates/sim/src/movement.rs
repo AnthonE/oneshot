@@ -145,7 +145,21 @@ pub fn step_paced(b: &mut Body, inp: &Input, map: &Map, pace: f32) {
     let mut v = b.vel;
     if b.grounded {
         let speed = (v.x * v.x + v.z * v.z).sqrt();
-        if speed > 0.0 {
+        // Skiing (an experiment): crouched at speed going down a slope of
+        // a terrain map, on its ground, little friction holds it and the
+        // slope pulls it on (a run, then a crouch down a scree bank). Slow,
+        // on the flat or going up, it is a crouch.
+        let on = SKI && b.crouched && speed >= SKI_MIN && map.terrain.is_some();
+        let n = if on && b.pos.y - map.ground(b.pos.x, b.pos.z) < SKI_ON_GROUND {
+            map.ground_normal(b.pos.x, b.pos.z)
+        } else {
+            V3::new(0.0, 1.0, 0.0)
+        };
+        if n.y < SKI_NY && n.x * v.x + n.z * v.z > 0.0 {
+            let k = (1.0 - SKI_FRICTION * DT).max(0.0);
+            v.x = v.x * k + n.x * (GRAVITY * DT);
+            v.z = v.z * k + n.z * (GRAVITY * DT);
+        } else if speed > 0.0 {
             let drop = speed.max(STOP) * FRICTION * DT;
             let k = (speed - drop).max(0.0) / speed;
             v.x *= k;

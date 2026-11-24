@@ -16,6 +16,7 @@
 
 pub mod asset_fetch;
 pub mod binds;
+pub mod cards;
 pub mod challenges;
 pub mod clip;
 pub mod config;
@@ -310,7 +311,7 @@ const TOUCH_SENS: f32 = 0.4 * core::f32::consts::PI / 180.0;
 
 /// The bound actions that are plain buttons (the player's keys,
 /// `binds.rs`); fire, the scope and the left trigger are `pump`'s own.
-const BUTTONS: [(binds::Action, u16); 8] = [
+const BUTTONS: [(binds::Action, u16); 12] = [
     (binds::Action::Jump, JUMP),
     (binds::Action::Crouch, CROUCH),
     (binds::Action::Melee, MELEE),
@@ -319,6 +320,10 @@ const BUTTONS: [(binds::Action, u16); 8] = [
     (binds::Action::Swap, SWAP),
     (binds::Action::Use, USE),
     (binds::Action::GrenSwitch, GREN_SWITCH),
+    (binds::Action::CardA, CARD_A),
+    (binds::Action::CardB, CARD_B),
+    (binds::Action::PickA, PICK_A),
+    (binds::Action::PickB, PICK_B),
 ];
 
 /// How the app runs: `autoplay` drives it (tests); `lite` draws POTATO
@@ -854,12 +859,14 @@ fn app_on(link: Box<dyn Link>, opts: Opts, first: Screen) -> App {
                 scores::setup,
                 scope::setup.after(hud::setup),
                 visor::setup.after(hud::setup),
+                cards::setup.after(hud::setup),
             ),
         )
         .add_systems(
             Update,
             (
                 hud::prompt,
+                cards::draw,
                 hud::feed,
                 hud::killed_line,
                 hud::reticle_tint,
@@ -1668,7 +1675,7 @@ const WHEELS_DOWN_M: f32 = 0.3;
 
 /// A one-seater's look as `draw_vehicles` stands it: its kind, a flier's
 /// nose and roll (radians), whether it boosts.
-type CraftLook = (u8, f32, f32, bool);
+type CraftLook = (u8, f32, f32, bool, bool);
 
 /// The vehicles: ours as predicted, the rest interpolated; each a truck
 /// (`look/truck.rs`) or a one-seater (`look/craft.rs`). The pose mode's
@@ -1702,7 +1709,7 @@ fn draw_vehicles(
             v.slot,
             Vec3::new(v.pos.x, v.pos.y, v.pos.z),
             v.yaw,
-            (v.kind, v.pitch, v.roll, v.boosting),
+            (v.kind, v.pitch, v.roll, v.boosting, v.stalled),
         )
     }));
     if let (Some((veh, p, yaw)), Some((i, _))) = (core.own_vehicle(), core.own().0.riding()) {
@@ -1711,7 +1718,7 @@ fn draw_vehicles(
             i as u8,
             Vec3::new(p.x, p.y, p.z),
             yaw,
-            (veh.kind, pitch, roll, veh.boosting),
+            (veh.kind, pitch, roll, veh.boosting, veh.stall > 0),
         ));
     }
     if let Some((p, yaw)) = posed.as_ref().and_then(|p| p.2.truck_at(time.elapsed_secs())) {
@@ -1719,7 +1726,7 @@ fn draw_vehicles(
             0,
             p + Vec3::Y * core.map.ground(p.x, p.z),
             yaw,
-            (sim::vehicle::TRUCK, 0.0, 0.0, false),
+            (sim::vehicle::TRUCK, 0.0, 0.0, false, false),
         ));
     }
     // The pose mode's one-seater, in the next slot.
@@ -1728,10 +1735,10 @@ fn draw_vehicles(
             1,
             p + Vec3::Y * core.map.ground(p.x, p.z),
             yaw,
-            (kind, pitch, roll, boost),
+            (kind, pitch, roll, boost, false),
         ));
     }
-    for &(slot, p, yaw, (kind, pitch, roll, boosting)) in list.iter() {
+    for &(slot, p, yaw, (kind, pitch, roll, boosting, stalled)) in list.iter() {
         // What its bed carries, on this map (or the pose's).
         let turret = match posed.as_ref().map(|p| p.2.truck_turret) {
             _ if kind != sim::vehicle::TRUCK => sim::vehicle::NO_TURRET,
@@ -1767,7 +1774,7 @@ fn draw_vehicles(
                         tr.set_if_neq(t);
                     }
                     if let Ok(mut c) = crafts.get_mut(e) {
-                        (c.yaw, c.pitch, c.roll, c.boosting) = (yaw, pitch, roll, boosting);
+                        (c.yaw, c.pitch, c.roll, c.boosting, c.stalled) = (yaw, pitch, roll, boosting, stalled);
                     }
                 }
                 None => {
@@ -2345,7 +2352,16 @@ fn fly(
         &mut parts,
         kit.as_deref(),
     );
+    // Our grapple's line, from a little under the eye to where it bit.
+    let (f, p) = core.own();
+    if f.hooked > 0 && f.alive {
+        let from = Vec3::new(p.x, p.y + f.body.eye_h() - ROPE_DROP_M, p.z);
+        look::fx::flying::rope(&mut fx, from, Vec3::new(f.hook.x, f.hook.y, f.hook.z));
+    }
 }
+
+/// How far under the eye our grapple's line starts: from the hand.
+const ROPE_DROP_M: f32 = 0.35;
 
 #[cfg(target_arch = "wasm32")]
 mod web_start {

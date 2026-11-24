@@ -320,6 +320,7 @@ fn snapshot() -> Snapshot {
         pitch: -9_000,
         trick: -80,
         boosting: true,
+        stalled: true,
     };
     // A rocket launcher on the floor, and someone's grenades.
     s.n_drops = 2;
@@ -768,14 +769,14 @@ fn the_bytes_match_their_goldens() {
     let n = encode_delta_golden(&mut buf);
     got.push(fnv(&buf[..n]));
     let want: &[u64] = &[
-        0x58ae_4fe0_5062_683d,
-        0xde93_6c5e_2cfd_4552,
-        0xc467_aea5_eb4e_211b,
-        0xdf84_084e_5c3a_cdbd,
+        0xb287_47c7_3c1e_0efc,
+        0xe43b_5bca_bba3_715d,
+        0xb422_8565_ea86_25c5,
+        0x611e_bb0e_7597_5e5b,
         0x7ebe_34b8_2c10_f2d0,
         0xec88_5efc_d9ac_e183,
         0x0f4a_a0e7_f967_a718,
-        0x1e8c_b203_73aa_0ed2,
+        0x6d71_f4eb_6e3b_b550,
         0x0835_ec07_b4ee_4fb0,
         0x27e4_471c_ac0a_7864,
         0x0294_d707_7d31_6639,
@@ -800,7 +801,7 @@ fn the_bytes_match_their_goldens() {
         0x451f_c0f0_80a6_2b96,
         0xaf63_d44c_8601_def4,
         0x8ec0_53de_d767_8611,
-        0x84df_dffe_8042_6f39,
+        0x0d85_126a_d44c_57b3,
     ];
     assert_eq!(got, want, "PROTO_VER {PROTO_VER}: got {got:#018x?}");
 }
@@ -883,4 +884,51 @@ fn a_flown_one_seater_and_its_pilots_bomb_come_back_exactly() {
     assert_eq!(d.own_vehicle, s.own_vehicle);
     assert_eq!(d.own.mount, s.own.mount);
     assert_eq!(d.vehicles(), s.vehicles(), "and the flier seen in the bubble");
+}
+
+/// Siege's cards ride the fighter's own record and come back exactly: two
+/// hands, their cools, an offer, a hook; and none of it costs a mode
+/// without cards more than a bit.
+#[test]
+fn a_fighters_own_cards_offer_and_hook_come_back_exactly() {
+    let mut s = snapshot();
+    s.own_vehicle = None;
+    s.own.ride = 0;
+    let bare = {
+        let mut buf = [0u8; MAX_DATAGRAM];
+        encode_snapshot(&s, &mut buf).unwrap()
+    };
+    s.own.cards = [sim::card::GRAPPLE, sim::card::BIRD];
+    s.own.card_cool = [0, 7_000];
+    s.own.offer = [sim::card::REWIND, sim::card::GRAPPLE];
+    s.own.offer_left = 1_200;
+    s.own.hook = V3::new(50.0, 4.25, -0.5);
+    s.own.hooked = 150;
+    let mut buf = [0u8; MAX_DATAGRAM];
+    let n = encode_snapshot(&s, &mut buf).unwrap();
+    let d = decode_snapshot(&buf[..n]).unwrap();
+    assert_eq!(
+        (
+            d.own.cards,
+            d.own.card_cool,
+            d.own.offer,
+            d.own.offer_left,
+            d.own.hook,
+            d.own.hooked
+        ),
+        (
+            s.own.cards,
+            s.own.card_cool,
+            s.own.offer,
+            s.own.offer_left,
+            s.own.hook,
+            s.own.hooked
+        )
+    );
+    assert!(n > bare, "cards cost only where they are");
+    // A frost bird is a projectile's kind of its own.
+    s.n_proj = 1;
+    s.proj[0].kind = sim::world::ProjKind::Bird as u8;
+    let n = encode_snapshot(&s, &mut buf).unwrap();
+    assert_eq!(decode_snapshot(&buf[..n]).unwrap().proj()[0].kind, 8);
 }

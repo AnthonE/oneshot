@@ -1413,6 +1413,7 @@ fn add_projectiles(
     // relevance a client at a time): on the stack, ties by slot.
     let mut seen = [(0.0f32, 0usize); sim::consts::MAX_PROJ];
     let mut n = 0;
+    let ride = w.fighters[s].riding().map(|(v, _)| v);
     for (i, p) in w.proj.live() {
         if !known(p.owner as usize) && !w.map.clear(eye, p.pos) {
             continue;
@@ -1420,7 +1421,7 @@ fn add_projectiles(
         if !stuck_shown(w, s, p, known, vehicle_visible) {
             continue;
         }
-        seen[n] = (proj_rank(p, s, eye), i);
+        seen[n] = (proj_rank(p, s, eye, ride), i);
         n += 1;
     }
     let seen = &mut seen[..n];
@@ -1444,11 +1445,11 @@ fn add_projectiles(
 pub const PROJ_CLOSING: f32 = 0.5;
 
 /// A round's place in client `s`'s queue, lowest first: its own rounds and
-/// any about it (homing on it, stuck to it) before anything, then the rest
-/// by distance from its eye, a round closing on it as [`PROJ_CLOSING`] as
-/// far.
-fn proj_rank(p: &sim::world::Projectile, s: usize, eye: V3) -> f32 {
-    if p.owner as usize == s || p.target as usize == s {
+/// any about it (homing on it or the hull it rides, stuck to it) before
+/// anything, then the rest by distance from its eye, a round closing on it
+/// as [`PROJ_CLOSING`] as far.
+fn proj_rank(p: &sim::world::Projectile, s: usize, eye: V3, ride: Option<usize>) -> f32 {
+    if p.owner as usize == s || p.target as usize == s || ride.is_some_and(|i| p.target as usize == MAX_FIGHTERS + i) {
         return -1.0;
     }
     let to_eye = eye - p.pos;
@@ -1580,6 +1581,7 @@ fn add_vehicles(
             pitch: v.pitch,
             trick: v.trick,
             boosting: v.boosting,
+            stalled: v.stall > 0,
         };
         snap.n_vehicles += 1;
     }

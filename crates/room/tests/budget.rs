@@ -191,11 +191,15 @@ fn a_full_bubble_fits_with_room_for_events() {
             pitch: -3_000,
             trick: 40,
             boosting: true,
+            stalled: true,
         };
     }
     snap.n_proj = MAX_SNAP_PROJ as u8;
     snap.n_drops = MAX_SNAP_DROPS as u8;
-    snap.own_vehicle = Some(w.vehicles[0]);
+    snap.own_vehicle = Some(sim::vehicle::Vehicle {
+        stall: 300,
+        ..w.vehicles[0]
+    });
     snap.drive = Some(sim::input::Input {
         mx: -127,
         mz: 127,

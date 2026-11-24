@@ -242,6 +242,19 @@ pub const SUPER_EDGE: i32 = 30;
 pub const SUPER_PUSH: f32 = 3.0;
 /// What a charged bolt does to a hull.
 pub const CHARGE_VEH_DMG: i32 = 60;
+/// A charged bolt on a hull kills its engine this long (Halo 2's
+/// overcharge): no throttle, steering or boost, as if nobody drove it; a
+/// flier falls as an unpiloted one does. Its guns still fire.
+pub const VEH_STALL_MS: u32 = 2500;
+/// A rocket fired with the aim on a hull an enemy rides locks on it (Halo
+/// 2's launcher locks on vehicles alone; a charged bolt with no body in its
+/// cone locks on one too): the aim passing within this of its middle, as a
+/// tangent, widened by its half length at its distance, inside the gun's
+/// `aim_range`, in clear line. The nearest in angle.
+pub const VEH_LOCK_CONE: f32 = 0.06;
+/// How fast a rocket locked on a hull turns toward it, radians a second:
+/// a strafe is caught, a boost across its path or a flier's roll slips it.
+pub const ROCKET_VEH_HOMING: f32 = 1.0;
 
 /// A frag, as Halo 2's multiplayer throws it (Halopedia's H2 weapon data,
 /// at 3.048 m a world unit): 160 out to 0.5 wu, down to 50 at 1.75 wu, less
@@ -653,3 +666,73 @@ pub const SIEGE_BOT_SKILL: f32 = 0.25;
 pub const BOT_VIEW_COS: f32 = 0.5;
 pub const BOT_HEAR_M: f32 = 4.0;
 pub const BOT_HURT_MS: u32 = 2000;
+
+// Siege's cards (docs/DESIGN.md §18, phase 1; `card.rs`). Verbs, not
+// percentages: none changes a gun, a shield or health's numbers.
+/// The grapple: a hook along the aim that bites the map this near, then
+/// pulls the body's middle to it at this speed for this long at most, let
+/// go this near it (its speed eased to `GRAPPLE_EXIT`, a vault over a lip)
+/// or on JUMP (all of its speed kept). Played again after its cool; a miss
+/// waits a moment only.
+pub const GRAPPLE_RANGE: f32 = 32.0;
+pub const GRAPPLE_SPEED: f32 = 20.0;
+pub const GRAPPLE_MS: u32 = 1600;
+pub const GRAPPLE_DONE: f32 = 1.6;
+pub const GRAPPLE_EXIT: f32 = 7.0;
+pub const GRAPPLE_COOL_MS: u32 = 7000;
+pub const GRAPPLE_MISS_COOL_MS: u32 = 600;
+/// Where the pull ends, over the feet: the body's middle.
+pub const GRAPPLE_MID: f32 = 0.9;
+/// The rewind: back to where the fighter stood this long ago in this life
+/// (its oldest place kept, if it has lived less), with the shields and
+/// health it had then if more than now. Where it stood is kept every
+/// `REWIND_EVERY_MS`.
+pub const REWIND_MS: u32 = 5000;
+pub const REWIND_EVERY_MS: u32 = 250;
+pub const REWIND_KEPT: usize = (REWIND_MS / REWIND_EVERY_MS) as usize + 1;
+pub const REWIND_COOL_MS: u32 = 30_000;
+/// The frost bird: a slow round its holder steers by its aim (toward what
+/// the aim meets), this fast, turning this fast (radians a second), for
+/// this long; it bursts on what it meets, a blast that strips shields and
+/// bites but never kills from full alone. Seen coming, and slow: dodged,
+/// or its holder shot while steering.
+pub const BIRD_SPEED: f32 = 14.0;
+pub const BIRD_TURN: f32 = 2.4;
+pub const BIRD_MS: u32 = 6000;
+pub const BIRD_DMG: i32 = 150;
+pub const BIRD_RADIUS: f32 = 7.0;
+pub const BIRD_FULL: f32 = 2.5;
+pub const BIRD_STEER_RANGE: f32 = 150.0;
+pub const BIRD_LEAD: f32 = 6.0;
+pub const BIRD_COOL_MS: u32 = 60_000;
+/// Offers: what play earns toward one (a kill; each fighter of the side in
+/// a generator's ring when it breaks; each `MERIT_RING_MS` overloading an
+/// enemy ring), and at this much one is dealt: two cards from the deck,
+/// open this long. Everyone starts with one's worth.
+pub const MERIT_KILL: u16 = 2;
+pub const MERIT_BREAK: u16 = 3;
+pub const MERIT_RING_MS: u32 = 5000;
+pub const OFFER_MERIT: u16 = 4;
+pub const OFFER_MS: u32 = 12_000;
+/// Siege's respawn grows as the match goes on: a second more each this
+/// long played, to this at most (and this in sudden death), from the
+/// mode's own (`Rules::respawn_ms`).
+pub const SIEGE_RESPAWN_STEP_MS: u32 = 240_000;
+pub const SIEGE_RESPAWN_MAX_MS: u32 = 9_000;
+/// A bot's cards: it takes an offer this long after it comes, throws the
+/// frost bird at whom it fights past this far, and grapples toward where
+/// it walks when that is past this far (and in the hook's reach).
+pub const BOT_PICK_MS: u32 = 1200;
+pub const BOT_BIRD_M: f32 = 14.0;
+pub const BOT_GRAPPLE_M: f32 = 14.0;
+/// Skiing (docs/DESIGN.md §16, milestone 9's experiment): on a terrain map,
+/// a body crouched on the ground at this speed or more slides: this much of
+/// its speed lost a second instead of a run's friction, and the slope's
+/// pull along the ground (its normal's flat part, of gravity), going down
+/// a slope steeper than this (its normal's y; about 6°). `SKI` off takes it
+/// out whole. Within this of the terrain is on it (not a box).
+pub const SKI: bool = true;
+pub const SKI_NY: f32 = 0.994;
+pub const SKI_MIN: f32 = 5.0;
+pub const SKI_FRICTION: f32 = 0.35;
+pub const SKI_ON_GROUND: f32 = 0.05;
